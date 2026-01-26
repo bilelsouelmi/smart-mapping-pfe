@@ -1,0 +1,104 @@
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: smart-mapping-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: smart_mapping_user
+      POSTGRES_PASSWORD: dev_password_123
+      POSTGRES_DB: smart_mapping
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smart_mapping_user -d smart_mapping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - smart-mapping-network
+
+  # ChromaDB for RAG
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: smart-mapping-chromadb
+    restart: unless-stopped
+    volumes:
+      - chromadb_data:/chroma/chroma
+    ports:
+      - "8001:8000"
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=False
+    networks:
+      - smart-mapping-network
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: smart-mapping-backend
+    restart: unless-stopped
+    environment:
+      # Database
+      DATABASE_URL: postgresql://smart_mapping_user:dev_password_123@postgres:5432/smart_mapping
+      
+      # Ollama (running on Windows host)
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      OLLAMA_MODEL: llama3.2
+      
+      # ChromaDB (running in Docker)
+      CHROMADB_HOST: chromadb
+      CHROMADB_PORT: 8000
+      
+      # Security
+      SECRET_KEY: ${SECRET_KEY}
+      
+      # Environment
+      ENVIRONMENT: development
+      DEBUG: "True"
+    volumes:
+      - ./backend:/app
+      - backend_uploads:/app/uploads
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      chromadb:
+        condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - smart-mapping-network
+
+  # React Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: smart-mapping-frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_URL: http://localhost:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    networks:
+      - smart-mapping-network
+
+volumes:
+  postgres_data:
+  chromadb_data:
+  backend_uploads:
+
+networks:
+  smart-mapping-network:
+    driver: bridge
