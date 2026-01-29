@@ -1,0 +1,11 @@
+currency_code,currency_name,currency_symbol,to_eur_rate,to_usd_rate,decimal_places
+TND,Tunisian Dinar,د.ت,0.304,0.320,3
+EUR,Euro,€,1.000,1.050,2
+USD,US Dollar,$,0.950,1.000,2
+GBP,British Pound,£,1.160,1.220,2
+CHF,Swiss Franc,Fr.,1.050,1.100,2
+JPY,Japanese Yen,¥,0.0065,0.0068,0
+CAD,Canadian Dollar,C$,0.690,0.725,2
+AUD,Australian Dollar,A$,0.610,0.640,2
+CNY,Chinese Yuan,¥,0.130,0.137,2
+SAR,Saudi Riyal,ر.س,0.250,0.267,2

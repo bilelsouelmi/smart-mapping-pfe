@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import Dict, Any
 import logging
@@ -141,4 +142,37 @@ async def list_outputs(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list outputs: {str(e)}"
+        )
+
+
+@router.get("/download/{filename}")
+async def download_output(
+    filename: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Télécharge un fichier output généré
+    """
+    try:
+        file_path = OUTPUT_DIR / filename
+        
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"File {filename} not found"
+            )
+        
+        return FileResponse(
+            path=str(file_path),
+            filename=filename,
+            media_type='application/json'
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Download failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Download failed: {str(e)}"
         )

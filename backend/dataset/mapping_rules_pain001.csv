@@ -1,0 +1,21 @@
+rule_id,rule_name,formula_type,formula_expression,input_fields,output_field,output_type,description,business_domain,example_input,example_output
+RULE_TND_EUR,Convert TND to EUR,arithmetic,amount * 0.304,"[""amount""]",amount_eur,decimal,Convertit montant TND en EUR,Banking,"{""amount"": 1500.50}",456.35
+RULE_DATE_ISO,Date Format ISO,transformation,"date_format(date, 'DD/MM/YYYY', 'YYYY-MM-DD')","[""date""]",date_iso,date,Convertit date format français vers ISO,Banking,"{""date"": ""27/01/2026""}",2026-01-27
+RULE_FULLNAME,Concatenate Full Name,transformation,"concat(first_name, ' ', last_name)","[""first_name"",""last_name""]",full_name,string,Crée nom complet à partir prénom et nom,Banking,"{""first_name"": ""Jean"", ""last_name"": ""Dupont""}",Jean Dupont
+RULE_UPPERCASE,Uppercase Text,transformation,uppercase(text),"[""text""]",text_upper,string,Convertit texte en majuscules,Banking,"{""text"": ""Jean Dupont""}",JEAN DUPONT
+RULE_LOWERCASE,Lowercase Text,transformation,lowercase(text),"[""text""]",text_lower,string,Convertit texte en minuscules,Banking,"{""text"": ""JEAN DUPONT""}",jean dupont
+RULE_IBAN_TN,Validate IBAN Tunisia,validation,"iban_validate(iban, 'TN')","[""iban""]",is_valid_iban,boolean,Valide format IBAN tunisien,Banking,"{""iban"": ""TN5914207490000021879544""}",true
+RULE_DOMESTIC,Check Domestic Transaction,conditional,IF country='TN' THEN 'DOMESTIC' ELSE 'INTERNATIONAL',"[""country""]",transaction_type,string,Détermine si transaction domestique ou internationale,Banking,"{""country"": ""TN""}",DOMESTIC
+RULE_AMT_CLASS,Amount Classification,conditional,"CASE WHEN amount < 1000 THEN 'LOW' WHEN amount < 10000 THEN 'MEDIUM' ELSE 'HIGH'","[""amount""]",amount_class,string,Classifie montant par tranche,Banking,"{""amount"": 1500.50}",MEDIUM
+RULE_PHONE_TN,Format Tunisia Phone,transformation,"phone_format(phone, '+216')","[""phone""]",phone_formatted,string,Formate numéro téléphone tunisien,Banking,"{""phone"": ""98765432""}",+216 98 765 432
+RULE_COUNTRY_ISO,Country Code Lookup,lookup,country_code_map[country],"[""country""]",country_iso3,string,Convertit code pays ISO2 vers ISO3,Banking,"{""country"": ""TN""}",TUN
+RULE_REMOVE_SPACES,Remove All Spaces,transformation,remove_spaces(text),"[""text""]",text_clean,string,Supprime tous les espaces,Banking,"{""text"": ""CTR 2026 001""}",CTR2026001
+RULE_TRIM,Trim Text,transformation,trim(text),"[""text""]",text_trimmed,string,Supprime espaces début et fin,Banking,"{""text"": ""  Jean Dupont  ""}",Jean Dupont
+RULE_EMAIL_VALID,Validate Email,validation,email_validate(email),"[""email""]",is_valid_email,boolean,Valide format email,Banking,"{""email"": ""jean@example.com""}",true
+RULE_BIC_VALID,Validate BIC Code,validation,"bic_validate(bic, 8, 11)","[""bic""]",is_valid_bic,boolean,Valide code BIC (8 ou 11 caractères),Banking,"{""bic"": ""BTKETN""}",false
+RULE_ROUND_2DEC,Round to 2 Decimals,arithmetic,round(amount 2),"[""amount""]",amount_rounded,decimal,Arrondit à 2 décimales,Banking,"{""amount"": 1500.5567}",1500.56
+RULE_CCY_SYMBOL,Currency Symbol,lookup,currency_symbol_map[currency],"[""currency""]",currency_symbol,string,Obtient symbole de la devise,Banking,"{""currency"": ""TND""}",د.ت
+RULE_VAT_CALC,Calculate VAT 19%,arithmetic,amount * 0.19,"[""amount""]",vat_amount,decimal,Calcule TVA à 19%,Banking,"{""amount"": 1000.00}",190.00
+RULE_TOTAL_VAT,Total with VAT,arithmetic,amount * 1.19,"[""amount""]",total_with_vat,decimal,Calcule total TTC,Banking,"{""amount"": 1000.00}",1190.00
+RULE_DATE_TODAY,Check if Today,conditional,IF date = TODAY() THEN 'YES' ELSE 'NO',"[""date""]",is_today,string,Vérifie si date est aujourd'hui,Banking,"{""date"": ""2026-01-27""}",YES
+RULE_WORKING_DAY,Next Working Day,transformation,next_working_day(date),"[""date""]",next_business_day,date,Calcule prochain jour ouvrable,Banking,"{""date"": ""2026-01-25""}",2026-01-27
