@@ -1,6 +1,5 @@
 from fastapi import APIRouter
-from app.api.routes import auth, users, files, message_descriptions, mapping_formulas
-from app.api.routes import auth, users, files, message_descriptions, mapping_formulas, transform
+from app.api.routes import auth, users, files, message_descriptions, mapping_formulas, transform, standard_elements
 
 api_router = APIRouter()
 
@@ -15,3 +14,4 @@ api_router.include_router(files.router, prefix="/files", tags=["files"])
 api_router.include_router(message_descriptions.router, prefix="/message-descriptions", tags=["message-descriptions"])
 api_router.include_router(mapping_formulas.router, prefix="/mapping-formulas", tags=["mapping-formulas"])
 api_router.include_router(transform.router, prefix="/transform", tags=["transform"])
+api_router.include_router(standard_elements.router, prefix="/standard-elements", tags=["standard-elements"])
