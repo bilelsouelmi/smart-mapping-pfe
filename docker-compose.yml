@@ -20,18 +20,18 @@ services:
     networks:
       - smart-mapping-network
 
-  # ChromaDB for RAG
-  chromadb:
-    image: chromadb/chroma:latest
-    container_name: smart-mapping-chromadb
+  # Qdrant Vector Database (NOUVEAU)
+  qdrant:
+    image: qdrant/qdrant:v1.8.4
+    container_name: smart-mapping-qdrant
     restart: unless-stopped
     volumes:
-      - chromadb_data:/chroma/chroma
+      - qdrant_data:/qdrant/storage
     ports:
-      - "8001:8000"
+      - "6333:6333"      # REST API
+      - "6334:6334"      # gRPC (optionnel)
     environment:
-      - IS_PERSISTENT=TRUE
-      - ANONYMIZED_TELEMETRY=False
+      - QDRANT__SERVICE__GRPC_PORT=6334
     networks:
       - smart-mapping-network
 
@@ -50,9 +50,9 @@ services:
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       OLLAMA_MODEL: llama3.2
       
-      # ChromaDB (running in Docker)
-      CHROMADB_HOST: chromadb
-      CHROMADB_PORT: 8000
+      # Qdrant (CHANGÉ)
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
       
       # Security
       SECRET_KEY: ${SECRET_KEY}
@@ -68,7 +68,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      chromadb:
+      qdrant:
         condition: service_started
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -96,7 +96,7 @@ services:
 
 volumes:
   postgres_data:
-  chromadb_data:
+  qdrant_data:        # NOUVEAU
   backend_uploads:
 
 networks:

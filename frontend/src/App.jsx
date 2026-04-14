@@ -2,13 +2,14 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
-
+import StandardElementsPage from './pages/StandardElementsPage';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import DashboardPage from './pages/DashboardPage';
 import UploadPage from './pages/UploadPage';
 import MappingsPage from './pages/MappingsPage';
 import OutputsPage from './pages/OutputsPage';
+import RAGSearch from './pages/RAGSearch';  // ← AJOUTÉ
 
 // Protected Route Component
 const ProtectedRoute = ({ children }) => {
@@ -63,10 +64,27 @@ function App() {
             }
           />
           <Route
+            path="/standard-elements"
+            element={
+              <ProtectedRoute>
+                <StandardElementsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
             path="/outputs"
             element={
               <ProtectedRoute>
                 <OutputsPage />
+              </ProtectedRoute>
+            }
+          />
+          {/* ← AJOUTÉ : RAG Search Route */}
+          <Route
+            path="/rag-search"
+            element={
+              <ProtectedRoute>
+                <RAGSearch />
               </ProtectedRoute>
             }
           />

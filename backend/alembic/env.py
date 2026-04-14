@@ -1,6 +1,7 @@
 from logging.config import fileConfig
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
+from sqlalchemy import create_engine
 from alembic import context
 import os
 import sys
@@ -9,18 +10,12 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from app.database import Base
-from app.config import settings
 
-# Import all models
-from app.models import (
-    User,
-    MessageDescription,
-    MappingFormula,
-    FileUpload,
-    TransformationJob,
-    ValidationReport,
-    KnowledgeBaseEntry,
-)
+# Import SEULEMENT les modeles qui existent
+from app.models.user import User
+from app.models.standard_element import StandardElement
+from app.models.message_description import MessageDescription
+from app.models.mapping_formula import MappingFormula
 
 config = context.config
 
@@ -31,7 +26,20 @@ target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    url = settings.DATABASE_URL
+    """Run migrations in 'offline' mode.
+
+    This configures the context with just a URL
+    and not an Engine, though an Engine is acceptable
+    here as well.  By skipping the Engine creation
+    we don't even need a DBAPI to be available.
+
+    Calls to context.execute() here emit the given string to the
+    script output.
+
+    """
+    # Force l'URL directement (evite les problemes d'encodage)
+    url = "postgresql://smart_mapping_user:dev_password_123@localhost:5432/smart_mapping"
+    
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -44,12 +52,15 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    configuration = config.get_section(config.config_ini_section)
-    configuration["sqlalchemy.url"] = settings.DATABASE_URL
-    
-    connectable = engine_from_config(
-        configuration,
-        prefix="sqlalchemy.",
+    """Run migrations in 'online' mode.
+
+    In this scenario we need to create an Engine
+    and associate a connection with the context.
+
+    """
+    # Force l'URL directement (evite les problemes d'encodage)
+    connectable = create_engine(
+        "postgresql://smart_mapping_user:dev_password_123@localhost:5432/smart_mapping",
         poolclass=pool.NullPool,
     )
 

@@ -13,7 +13,10 @@ from app.config import settings
 from app.services.file_processor import FileProcessor
 from app.services.llm_service import LLMService
 from app.models.message_description import MessageDescription
+from app.models.file_upload import FileUpload, FileUploadStatus
 from app.schemas.message_description import MessageDescriptionResponse
+from app.services.element_matcher import ElementMatcher
+from app.services import ai_learning_service 
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -31,17 +34,11 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 @router.post("/upload", response_model=Dict[str, Any])
 async def upload_file(
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),  # ← Ajoutez cette ligne
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """
-    Upload un fichier
-    
-    Returns:
-        Informations sur le fichier uploadé
-    """
+    """Upload un fichier"""
     try:
-        # Validate file type
         file_extension = Path(file.filename).suffix.lower().replace('.', '')
         
         if file_extension not in FileProcessor.SUPPORTED_FORMATS:
@@ -50,11 +47,9 @@ async def upload_file(
                 detail=f"Unsupported file format. Supported: {', '.join(FileProcessor.SUPPORTED_FORMATS)}"
             )
         
-        # Generate unique filename
         unique_filename = f"{uuid.uuid4()}_{file.filename}"
         file_path = UPLOAD_DIR / unique_filename
         
-        # Save file
         content = await file.read()
         with open(file_path, "wb") as f:
             f.write(content)
@@ -78,20 +73,17 @@ async def upload_file(
         )
 
 
-@router.post("/analyze", response_model=MessageDescriptionResponse)
+@router.post("/analyze", response_model=Dict[str, Any])
 async def analyze_file(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    Upload et analyse un fichier avec l'IA - Détection automatique de la hiérarchie
-    
-    Returns:
-        MessageDescription avec structure hiérarchique détectée
+    Upload et analyse un fichier avec l'IA
+    Détection automatique de la hiérarchie + Suggestions AI Learning + Enrichissement Qdrant
     """
     try:
-        # Upload file first
         file_extension = Path(file.filename).suffix.lower().replace('.', '')
         
         if file_extension not in FileProcessor.SUPPORTED_FORMATS:
@@ -100,17 +92,30 @@ async def analyze_file(
                 detail=f"Unsupported file format. Supported: {', '.join(FileProcessor.SUPPORTED_FORMATS)}"
             )
         
-        # Generate unique filename
         unique_filename = f"{uuid.uuid4()}_{file.filename}"
         file_path = UPLOAD_DIR / unique_filename
         
-        # Save file
         content = await file.read()
         with open(file_path, "wb") as f:
             f.write(content)
         
-        logger.info(f"Analyzing file with hierarchy detection: {unique_filename}")
-        
+        logger.info(f"Analyzing file with AI Learning: {unique_filename}")
+
+        # ── NOUVEAU : Créer FileUpload en base ────────────────────────────────
+        file_upload = FileUpload(
+            user_id=current_user.id,
+            original_filename=file.filename,
+            file_path=str(file_path),
+            file_type=file_extension.upper(),
+            file_size=len(content),
+            status=FileUploadStatus.PROCESSING
+        )
+        db.add(file_upload)
+        db.commit()
+        db.refresh(file_upload)
+        logger.info(f"FileUpload created: ID {file_upload.id}")
+        # ── FIN NOUVEAU ───────────────────────────────────────────────────────
+
         # Process file to extract structure
         file_info = file_processor.process_file(str(file_path))
         
@@ -123,13 +128,12 @@ async def analyze_file(
         hierarchy_paths = []
         
         if file_type in ['JSON', 'XML']:
-            # Pour JSON/XML, parser la structure hiérarchique directement
             if sample_data and len(sample_data) > 0:
                 try:
                     hierarchy_paths = hierarchy_parser.parse_structure(sample_data[0], max_level=3)
                     hierarchical_structure = {
                         "type": "hierarchical",
-                        "paths": hierarchy_paths[:20],  # Limiter à 20 chemins
+                        "paths": hierarchy_paths[:20],
                         "total_paths": len(hierarchy_paths)
                     }
                     logger.info(f"Detected {len(hierarchy_paths)} hierarchical paths in {file_type}")
@@ -137,12 +141,11 @@ async def analyze_file(
                     logger.warning(f"Could not parse hierarchical structure: {e}")
         
         elif file_type in ['CSV', 'Excel']:
-            # Pour CSV/Excel, vérifier si les colonnes contiennent des points (nomenclature hiérarchique)
             hierarchical_columns = []
             for col in columns:
                 if '.' in col:
                     levels = col.split('.')
-                    if len(levels) <= 4:  # Max 3 niveaux (4 parties)
+                    if len(levels) <= 4:
                         hierarchical_columns.append({
                             "path": col,
                             "level": len(levels),
@@ -163,14 +166,12 @@ async def analyze_file(
         logger.info("Sending file structure to LLM for analysis...")
         analysis = llm_service.analyze_file_structure(
             columns=columns,
-            sample_data=sample_data[:3],  # Limiter à 3 lignes pour l'IA
+            sample_data=sample_data[:3],
             file_type=file_type
         )
         
-        # Enrichir l'analyse avec la structure hiérarchique
         column_structure = analysis.get('columns_analysis', [])
         
-        # Ajouter les infos hiérarchiques aux colonnes
         if hierarchical_structure and hierarchical_structure['type'] == 'flat_with_notation':
             for col_analysis in column_structure:
                 col_name = col_analysis.get('name')
@@ -186,7 +187,10 @@ async def analyze_file(
             file_type=file_type,
             business_domain=analysis.get('business_domain'),
             column_structure=column_structure,
-            sample_data=sample_data[:10]  # Sauvegarder 10 lignes
+            sample_data=sample_data[:10],
+            # ── NOUVEAU : lier au FileUpload ──────────────────────────────────
+            file_upload_id=file_upload.id
+            # ── FIN NOUVEAU ───────────────────────────────────────────────────
         )
         
         db.add(message_desc)
@@ -194,8 +198,73 @@ async def analyze_file(
         db.refresh(message_desc)
         
         logger.info(f"MessageDescription created: ID {message_desc.id}")
+
+        # ── NOUVEAU : Marquer FileUpload comme COMPLETED ──────────────────────
+        file_upload.status = FileUploadStatus.COMPLETED
+        db.commit()
+        # ── FIN NOUVEAU ───────────────────────────────────────────────────────
         
-        # Ajouter les infos hiérarchiques à la réponse (pour le frontend)
+        # === Générer suggestions avec AI Learning + Enrichissement Qdrant ===
+        from app.services.ai_learning_service import ai_learning_service
+        
+        suggestions = {}
+        try:
+            logger.info(f"🤖 Generating AI Learning suggestions for {len(columns)} columns")
+            
+            for column in columns:
+                # AI Learning Service (inclut maintenant l'enrichissement Qdrant)
+                suggestion = await ai_learning_service.suggest_field_mapping(
+                    field_id=column,
+                    field_name=column,
+                    sample_data=sample_data[:5],
+                    message_description_id=message_desc.id,
+                    db=db
+                )
+                
+                # ── MODIFIÉ : Format enrichi pour le frontend ─────────────────
+                suggestions[column] = [{
+                    "element_id": suggestion.get('element_id', column),
+                    "element_name": suggestion.get('element_name', column),
+                    "target_path": suggestion.get('target', ''),
+                    "confidence": int(suggestion.get('confidence', 0.5) * 100),
+                    "category": "AI Suggestion",
+                    "reason": f"Suggested by {suggestion.get('suggestion_source', 'AI')}",
+                    "suggestion_source": suggestion.get('suggestion_source', 'ai'),
+
+                    # ── Champs enrichis depuis Qdrant ─────────────────────────
+                    "audit_requirement": suggestion.get('audit_requirement'),
+                    "compliance_requirement": suggestion.get('compliance_requirement'),
+                    "data_privacy": suggestion.get('data_privacy'),
+                    "migration_note": suggestion.get('migration_note'),
+                    "caching_strategy": suggestion.get('caching_strategy'),
+                    "performance_impact": suggestion.get('performance_impact'),
+                    "global_variable_refs": suggestion.get('global_variable_refs', []),
+                    "has_audit_requirement": suggestion.get('has_audit_requirement', False),
+                    "has_compliance_requirement": suggestion.get('has_compliance_requirement', False),
+                    "has_migration_note": suggestion.get('has_migration_note', False),
+                    "rag_mapping_id": suggestion.get('rag_mapping_id'),
+                    "rag_mapping_name": suggestion.get('rag_mapping_name'),
+                    "rag_similarity_score": suggestion.get('rag_similarity_score'),
+                    # ── Nouveau format imbriqué mapping_formula ───────────────
+                    "mapping_formula": suggestion.get('mapping_formula'),
+                    # ── Web Search enrichment ─────────────────────────────────
+                    "web_enrichment": suggestion.get('web_enrichment', []),
+                    "web_search_performed": suggestion.get('web_search_performed', False),
+                    # ── FIN champs enrichis ───────────────────────────────────
+
+                    # Données complètes pour l'apprentissage
+                    "full_suggestion": suggestion
+                }]
+            
+            logger.info(f"✅ Generated enriched suggestions for {len(suggestions)} columns")
+            
+        except Exception as e:
+            logger.error(f"Error generating AI Learning suggestions: {e}")
+            import traceback
+            traceback.print_exc()
+            suggestions = {}
+        
+        # Réponse complète
         response_data = {
             "id": message_desc.id,
             "user_id": message_desc.user_id,
@@ -208,8 +277,11 @@ async def analyze_file(
             "sample_data": message_desc.sample_data,
             "created_at": message_desc.created_at,
             "updated_at": message_desc.updated_at,
-            # Infos supplémentaires pour le frontend
-            "hierarchical_structure": hierarchical_structure
+            "hierarchical_structure": hierarchical_structure,
+            "suggestions": suggestions,
+            # ── NOUVEAU : file_upload_id ──────────────────────────────────────
+            "file_upload_id": file_upload.id
+            # ── FIN NOUVEAU ───────────────────────────────────────────────────
         }
         
         return response_data
@@ -222,17 +294,127 @@ async def analyze_file(
         )
     except Exception as e:
         logger.error(f"File analysis failed: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"File analysis failed: {str(e)}"
         )
 
 
+@router.get("/")
+async def list_files(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Liste tous les fichiers uploadés par l'utilisateur"""
+    try:
+        message_descs = db.query(MessageDescription).filter(
+            MessageDescription.user_id == current_user.id
+        ).order_by(MessageDescription.created_at.desc()).all()
+        
+        return {
+            "files": [
+                {
+                    "id": md.id,
+                    "file_name": md.file_name,
+                    "file_type": md.file_type,
+                    "business_domain": md.business_domain,
+                    "created_at": md.created_at
+                }
+                for md in message_descs
+            ],
+            "total": len(message_descs)
+        }
+    except Exception as e:
+        logger.error(f"Error listing files: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to list files"
+        )
+
+
+@router.get("/{file_id}")
+async def get_file(
+    file_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Récupère les détails d'un fichier"""
+    try:
+        message_desc = db.query(MessageDescription).filter(
+            MessageDescription.id == file_id,
+            MessageDescription.user_id == current_user.id
+        ).first()
+        
+        if not message_desc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="File not found"
+            )
+        
+        return {
+            "id": message_desc.id,
+            "user_id": message_desc.user_id,
+            "file_name": message_desc.file_name,
+            "file_type": message_desc.file_type,
+            "source_system": message_desc.source_system,
+            "target_system": message_desc.target_system,
+            "business_domain": message_desc.business_domain,
+            "column_structure": message_desc.column_structure,
+            "sample_data": message_desc.sample_data,
+            "created_at": message_desc.created_at,
+            "updated_at": message_desc.updated_at
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting file: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get file"
+        )
+
+
+@router.delete("/{file_id}")
+async def delete_file(
+    file_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Supprime un fichier"""
+    try:
+        message_desc = db.query(MessageDescription).filter(
+            MessageDescription.id == file_id,
+            MessageDescription.user_id == current_user.id
+        ).first()
+        
+        if not message_desc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="File not found"
+            )
+        
+        db.delete(message_desc)
+        db.commit()
+        
+        logger.info(f"File deleted: {message_desc.file_name} (ID: {file_id})")
+        
+        return {"message": "File deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting file: {e}")
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete file"
+        )
+
+
 @router.get("/supported-formats")
 async def get_supported_formats():
-    """
-    Retourne les formats de fichiers supportés
-    """
+    """Retourne les formats de fichiers supportés"""
     return {
         "supported_formats": FileProcessor.SUPPORTED_FORMATS,
         "descriptions": {

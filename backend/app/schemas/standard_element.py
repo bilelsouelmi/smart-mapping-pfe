@@ -12,6 +12,7 @@ class StandardElementBase(BaseModel):
     target_path: Optional[str] = Field(None, max_length=500)
     iso20022_path: Optional[str] = Field(None, max_length=500)
     data_type: str = Field(..., max_length=50)
+    structure_type: str = Field(default="simple", max_length=20)
     format_pattern: Optional[str] = Field(None, max_length=200)
     description: Optional[str] = None
     example_value: Optional[str] = Field(None, max_length=500)
@@ -34,6 +35,7 @@ class StandardElementUpdate(BaseModel):
     target_path: Optional[str] = Field(None, max_length=500)
     iso20022_path: Optional[str] = Field(None, max_length=500)
     data_type: Optional[str] = Field(None, max_length=50)
+    structure_type: Optional[str] = Field(None, max_length=20)
     description: Optional[str] = None
     example_value: Optional[str] = Field(None, max_length=500)
     is_active: Optional[bool] = None

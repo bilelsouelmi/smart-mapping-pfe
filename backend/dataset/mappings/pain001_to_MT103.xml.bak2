@@ -1,0 +1,1578 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MessageMapping xmlns="http://vermeg.com/banking/mapping" version="1.0">
+  
+  <!-- ============================================= -->
+  <!-- GENERAL INFORMATION -->
+  <!-- ============================================= -->
+  <GeneralInformation>
+    <MappingId>MAP_PAIN001_MT103_001</MappingId>
+    <MappingName>pain.001 to MT103 Conversion</MappingName>
+    <Version>2.0.0</Version>
+    <CreatedDate>2026-02-03</CreatedDate>
+    <CreatedBy>Bilel SOUELMI - Vermeg FinTech Team</CreatedBy>
+    <LastModifiedDate>2026-02-03</LastModifiedDate>
+    <Status>ACTIVE</Status>
+    
+    <BusinessContext>
+      <Description>
+        Converts ISO 20022 pain.001.001.09 (CustomerCreditTransferInitiation) to SWIFT MT103.
+        This is the reverse flow from the ISO 20022 migration - used when a modern system
+        needs to send payments to banks that still only accept SWIFT MT messages.
+        
+        pain.001 is initiated by corporate customers or banks' own systems to instruct
+        payment processing. MT103 is the interbank format for executing those payments.
+        
+        This conversion is critical during the SWIFT migration transition period (2023-2025)
+        when some banks have migrated to ISO 20022 but their correspondent banks haven't.
+      </Description>
+      
+      <UseCases>
+        <UseCase>Corporate payment initiation via ISO 20022 to legacy SWIFT network</UseCase>
+        <UseCase>Modern core banking system to correspondent bank communication</UseCase>
+        <UseCase>Payment hub routing to non-ISO 20022 banks</UseCase>
+        <UseCase>Treasury workstation to SWIFT network</UseCase>
+        <UseCase>API-based payment services to traditional banking</UseCase>
+      </UseCases>
+      
+      <ApplicableDomains>
+        Payment Hub, Corporate Banking, Treasury, API Banking, 
+        Correspondent Banking, Cross-border Payments
+      </ApplicableDomains>
+      
+      <MigrationContext>
+        <Initiative>SWIFT ISO 20022 Migration - Coexistence Phase</Initiative>
+        <Timeline>2023-2025 dual format support required</Timeline>
+        <Challenge>Structured ISO 20022 data must fit into unstructured MT fields</Challenge>
+        <RiskArea>Data loss when converting structured to unstructured format</RiskArea>
+      </MigrationContext>
+    </BusinessContext>
+    
+    <TechnicalSpecifications>
+      <SourceFormat>ISO 20022 pain.001.001.09 (XML)</SourceFormat>
+      <TargetFormat>SWIFT MT103 (ISO 15022)</TargetFormat>
+      <ProcessingMode>REAL_TIME</ProcessingMode>
+      <AverageProcessingTime>180ms</AverageProcessingTime>
+      <MaxProcessingTime>2000ms</MaxProcessingTime>
+      <ThroughputCapacity>8000 messages/second</ThroughputCapacity>
+    </TechnicalSpecifications>
+    
+    <ComplianceRequirements>
+      <Regulation>SWIFT Standards MT103 Usage Guidelines</Regulation>
+      <Regulation>AML/CFT - Originator/Beneficiary Information</Regulation>
+      <Regulation>FATF Travel Rule Implementation</Regulation>
+      <Regulation>EU Sanctions Compliance</Regulation>
+      <Regulation>PSD2 - Strong Customer Authentication</Regulation>
+      <Regulation>GDPR - Data Minimization</Regulation>
+    </ComplianceRequirements>
+    
+    <KeyChallenges>
+      <Challenge>ISO 20022 structured address → MT103 4x35 unstructured</Challenge>
+      <Challenge>Structured remittance information → 4x35 free text</Challenge>
+      <Challenge>Multiple purpose codes → Single bank operation code</Challenge>
+      <Challenge>Rich party identification → Limited MT field space</Challenge>
+      <Challenge>XML → Fixed-length SWIFT format</Challenge>
+      <Challenge>Data truncation risk - ISO 20022 fields are longer</Challenge>
+    </KeyChallenges>
+  </GeneralInformation>
+  
+  <!-- ============================================= -->
+  <!-- SOURCE MESSAGE STRUCTURE (pain.001) -->
+  <!-- ============================================= -->
+  <SourceMessage>
+    <MessageType>pain.001.001.09</MessageType>
+    <MessageName>CustomerCreditTransferInitiation</MessageName>
+    <Standard>ISO 20022</Standard>
+    <Schema>pain.001.001.09.xsd</Schema>
+    <Namespace>urn:iso:std:iso:20022:tech:xsd:pain.001.001.09</Namespace>
+    <Category>Customer Payments - Initiation</Category>
+    
+    <Fields>
+      
+      <!-- Field 1: Message Identification -->
+      <Field id="FIELD_01">
+        <XPath>/Document/CstmrCdtTrfInitn/GrpHdr/MsgId</XPath>
+        <FieldName>Message Identification</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>35</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Format>Max35Text</Format>
+        <Description>Unique identification assigned by the initiating party</Description>
+        <ExampleValue>CORP-PMT-20260203-001</ExampleValue>
+      </Field>
+      
+      <!-- Field 2: Creation Date Time -->
+      <Field id="FIELD_02">
+        <XPath>/Document/CstmrCdtTrfInitn/GrpHdr/CreDtTm</XPath>
+        <FieldName>Creation Date Time</FieldName>
+        <DataType>DATETIME</DataType>
+        <Mandatory>true</Mandatory>
+        <Format>ISODateTime</Format>
+        <Description>Date and time at which the message was created</Description>
+        <ExampleValue>2026-02-03T10:30:00Z</ExampleValue>
+      </Field>
+      
+      <!-- Field 3: Initiating Party Name -->
+      <Field id="FIELD_03">
+        <XPath>/Document/CstmrCdtTrfInitn/GrpHdr/InitgPty/Nm</XPath>
+        <FieldName>Initiating Party Name</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>140</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Description>Name of the party initiating the payment</Description>
+        <ExampleValue>CORPORATE SERVICES SA</ExampleValue>
+      </Field>
+      
+      <!-- Field 4: Payment Information Identification -->
+      <Field id="FIELD_04">
+        <XPath>/Document/CstmrCdtTrfInitn/PmtInf/PmtInfId</XPath>
+        <FieldName>Payment Information Identification</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>35</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Description>Unique identification assigned to the payment information block</Description>
+        <ExampleValue>PMTINF-001-20260203</ExampleValue>
+      </Field>
+      
+      <!-- Field 5: Requested Execution Date -->
+      <Field id="FIELD_05">
+        <XPath>/Document/CstmrCdtTrfInitn/PmtInf/ReqdExctnDt/Dt</XPath>
+        <FieldName>Requested Execution Date</FieldName>
+        <DataType>DATE</DataType>
+        <Mandatory>true</Mandatory>
+        <Format>ISODate</Format>
+        <Description>Date at which the initiating party requests execution</Description>
+        <ExampleValue>2026-02-03</ExampleValue>
+      </Field>
+      
+      <!-- Field 6: Debtor Name -->
+      <Field id="FIELD_06">
+        <XPath>/Document/CstmrCdtTrfInitn/PmtInf/Dbtr/Nm</XPath>
+        <FieldName>Debtor Name</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>140</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Description>Name of the debtor (payer)</Description>
+        <ExampleValue>ACME CORPORATION</ExampleValue>
+      </Field>
+      
+      <!-- Field 7: Debtor Account IBAN -->
+      <Field id="FIELD_07">
+        <XPath>/Document/CstmrCdtTrfInitn/PmtInf/DbtrAcct/Id/IBAN</XPath>
+        <FieldName>Debtor Account IBAN</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>34</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>IBAN of the debtor account</Description>
+        <ExampleValue>FR7630004000031234567890143</ExampleValue>
+      </Field>
+      
+      <!-- Field 8: Debtor Address -->
+      <Field id="FIELD_08">
+        <XPath>/Document/CstmrCdtTrfInitn/PmtInf/Dbtr/PstlAdr</XPath>
+        <FieldName>Debtor Postal Address</FieldName>
+        <DataType>STRUCTURED</DataType>
+        <Mandatory>false</Mandatory>
+        <SubFields>
+          <SubField name="StrtNm" xpath="StrtNm" description="Street name"/>
+          <SubField name="BldgNb" xpath="BldgNb" description="Building number"/>
+          <SubField name="PstCd" xpath="PstCd" description="Post code"/>
+          <SubField name="TwnNm" xpath="TwnNm" description="Town name"/>
+          <SubField name="Ctry" xpath="Ctry" description="Country code"/>
+        </SubFields>
+        <Description>Structured postal address of debtor</Description>
+      </Field>
+      
+      <!-- Field 9: Debtor Agent BIC -->
+      <Field id="FIELD_09">
+        <XPath>/Document/CstmrCdtTrfInitn/PmtInf/DbtrAgt/FinInstnId/BICFI</XPath>
+        <FieldName>Debtor Agent BIC</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>11</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>BIC of the debtor's financial institution</Description>
+        <ExampleValue>BNPAFRPPXXX</ExampleValue>
+      </Field>
+      
+      <!-- Field 10: Instructed Amount -->
+      <Field id="FIELD_10">
+        <XPath>/Document/CstmrCdtTrfInitn/PmtInf/CdtTrfTxInf/Amt/InstdAmt</XPath>
+        <FieldName>Instructed Amount</FieldName>
+        <DataType>AMOUNT</DataType>
+        <Mandatory>true</Mandatory>
+        <Attributes>
+          <Attribute name="Ccy" type="CurrencyCode"/>
+        </Attributes>
+        <Description>Amount of money to be transferred</Description>
+        <ExampleValue Ccy="EUR">15000.00</ExampleValue>
+      </Field>
+      
+      <!-- Field 11: Creditor Agent BIC -->
+      <Field id="FIELD_11">
+        <XPath>/Document/CstmrCdtTrfInitn/PmtInf/CdtTrfTxInf/CdtrAgt/FinInstnId/BICFI</XPath>
+        <FieldName>Creditor Agent BIC</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>11</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>BIC of the creditor's financial institution</Description>
+        <ExampleValue>DEUTDEFFXXX</ExampleValue>
+      </Field>
+      
+      <!-- Field 12: Creditor Name -->
+      <Field id="FIELD_12">
+        <XPath>/Document/CstmrCdtTrfInitn/PmtInf/CdtTrfTxInf/Cdtr/Nm</XPath>
+        <FieldName>Creditor Name</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>140</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Description>Name of the creditor (payee)</Description>
+        <ExampleValue>DEUTSCHE BANK AG</ExampleValue>
+      </Field>
+      
+      <!-- Field 13: Creditor Account IBAN -->
+      <Field id="FIELD_13">
+        <XPath>/Document/CstmrCdtTrfInitn/PmtInf/CdtTrfTxInf/CdtrAcct/Id/IBAN</XPath>
+        <FieldName>Creditor Account IBAN</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>34</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>IBAN of the creditor account</Description>
+        <ExampleValue>DE89370400440532013000</ExampleValue>
+      </Field>
+      
+      <!-- Field 14: Creditor Address -->
+      <Field id="FIELD_14">
+        <XPath>/Document/CstmrCdtTrfInitn/PmtInf/CdtTrfTxInf/Cdtr/PstlAdr</XPath>
+        <FieldName>Creditor Postal Address</FieldName>
+        <DataType>STRUCTURED</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Structured postal address of creditor</Description>
+      </Field>
+      
+      <!-- Field 15: Remittance Information Unstructured -->
+      <Field id="FIELD_15">
+        <XPath>/Document/CstmrCdtTrfInitn/PmtInf/CdtTrfTxInf/RmtInf/Ustrd</XPath>
+        <FieldName>Remittance Information Unstructured</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>140</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>Unstructured remittance information</Description>
+        <ExampleValue>Invoice 2026-001 Payment</ExampleValue>
+      </Field>
+      
+      <!-- Field 16: Remittance Information Structured -->
+      <Field id="FIELD_16">
+        <XPath>/Document/CstmrCdtTrfInitn/PmtInf/CdtTrfTxInf/RmtInf/Strd</XPath>
+        <FieldName>Remittance Information Structured</FieldName>
+        <DataType>STRUCTURED</DataType>
+        <Mandatory>false</Mandatory>
+        <SubFields>
+          <SubField name="CdtrRefInf/Ref" description="Creditor reference"/>
+        </SubFields>
+        <Description>Structured remittance information (invoices, etc.)</Description>
+      </Field>
+      
+      <!-- Field 17: Charge Bearer -->
+      <Field id="FIELD_17">
+        <XPath>/Document/CstmrCdtTrfInitn/PmtInf/ChrgBr</XPath>
+        <FieldName>Charge Bearer</FieldName>
+        <DataType>CODE</DataType>
+        <Mandatory>false</Mandatory>
+        <AllowedValues>
+          <Value code="DEBT">Debtor</Value>
+          <Value code="CRED">Creditor</Value>
+          <Value code="SHAR">Shared</Value>
+          <Value code="SLEV">Service Level</Value>
+        </AllowedValues>
+        <Description>Party responsible for charges</Description>
+        <ExampleValue>SHAR</ExampleValue>
+      </Field>
+      
+      <!-- Field 18: Purpose Code -->
+      <Field id="FIELD_18">
+        <XPath>/Document/CstmrCdtTrfInitn/PmtInf/CdtTrfTxInf/Purp/Cd</XPath>
+        <FieldName>Purpose Code</FieldName>
+        <DataType>CODE</DataType>
+        <MaxLength>4</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>Purpose of the payment</Description>
+        <ExampleValue>SUPP</ExampleValue>
+        <AllowedValues>
+          <Value code="SALA">Salary Payment</Value>
+          <Value code="SUPP">Supplier Payment</Value>
+          <Value code="TRAD">Trade</Value>
+          <Value code="CASH">Cash Management</Value>
+        </AllowedValues>
+      </Field>
+      
+    </Fields>
+  </SourceMessage>
+  
+  <!-- ============================================= -->
+  <!-- TARGET MESSAGE STRUCTURE (MT103) -->
+  <!-- ============================================= -->
+  <TargetMessage>
+    <MessageType>MT103</MessageType>
+    <MessageName>Single Customer Credit Transfer</MessageName>
+    <Standard>SWIFT ISO 15022</Standard>
+    <Category>Customer Payments</Category>
+    
+    <Fields>
+      
+      <!-- Field 1: Sender's Reference (20) -->
+      <Field id="FIELD_01">
+        <FieldTag>:20:</FieldTag>
+        <FieldName>Sender's Reference</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>16</MaxLength>
+        <Mandatory>true</Mandatory>
+        <ExampleValue>PMT2026020301</ExampleValue>
+      </Field>
+      
+      <!-- Field 2: Bank Operation Code (23B) -->
+      <Field id="FIELD_02">
+        <FieldTag>:23B:</FieldTag>
+        <FieldName>Bank Operation Code</FieldName>
+        <DataType>CODE</DataType>
+        <MaxLength>4</MaxLength>
+        <Mandatory>true</Mandatory>
+        <ExampleValue>CRED</ExampleValue>
+      </Field>
+      
+      <!-- Field 3: Value Date, Currency, Amount (32A) -->
+      <Field id="FIELD_03">
+        <FieldTag>:32A:</FieldTag>
+        <FieldName>Value Date, Currency, Amount</FieldName>
+        <DataType>COMPOSITE</DataType>
+        <Format>YYMMDD[CCY][AMOUNT]</Format>
+        <Mandatory>true</Mandatory>
+        <ExampleValue>260203EUR15000,00</ExampleValue>
+      </Field>
+      
+      <!-- Field 4: Ordering Customer (50K) -->
+      <Field id="FIELD_04">
+        <FieldTag>:50K:</FieldTag>
+        <FieldName>Ordering Customer</FieldName>
+        <DataType>TEXT</DataType>
+        <MaxLength>140</MaxLength>
+        <Format>[/Account]CRLF4*35x</Format>
+        <Mandatory>true</Mandatory>
+        <ExampleValue>/FR7630004000031234567890143
+ACME CORPORATION
+123 MAIN STREET
+PARIS FRANCE</ExampleValue>
+      </Field>
+      
+      <!-- Field 5: Ordering Institution (52A) -->
+      <Field id="FIELD_05">
+        <FieldTag>:52A:</FieldTag>
+        <FieldName>Ordering Institution</FieldName>
+        <DataType>BIC</DataType>
+        <Mandatory>false</Mandatory>
+        <ExampleValue>BNPAFRPPXXX</ExampleValue>
+      </Field>
+      
+      <!-- Field 6: Sender's Correspondent (53A) -->
+      <Field id="FIELD_06">
+        <FieldTag>:53A:</FieldTag>
+        <FieldName>Sender's Correspondent</FieldName>
+        <DataType>BIC</DataType>
+        <Mandatory>false</Mandatory>
+        <ExampleValue></ExampleValue>
+      </Field>
+      
+      <!-- Field 7: Receiver's Correspondent (54A) -->
+      <Field id="FIELD_07">
+        <FieldTag>:54A:</FieldTag>
+        <FieldName>Receiver's Correspondent</FieldName>
+        <DataType>BIC</DataType>
+        <Mandatory>false</Mandatory>
+        <ExampleValue></ExampleValue>
+      </Field>
+      
+      <!-- Field 8: Intermediary Institution (56A) -->
+      <Field id="FIELD_08">
+        <FieldTag>:56A:</FieldTag>
+        <FieldName>Intermediary Institution</FieldName>
+        <DataType>BIC</DataType>
+        <Mandatory>false</Mandatory>
+        <ExampleValue></ExampleValue>
+      </Field>
+      
+      <!-- Field 9: Account With Institution (57A) -->
+      <Field id="FIELD_09">
+        <FieldTag>:57A:</FieldTag>
+        <FieldName>Account With Institution</FieldName>
+        <DataType>BIC</DataType>
+        <Mandatory>false</Mandatory>
+        <ExampleValue>DEUTDEFFXXX</ExampleValue>
+      </Field>
+      
+      <!-- Field 10: Beneficiary Customer (59) -->
+      <Field id="FIELD_10">
+        <FieldTag>:59:</FieldTag>
+        <FieldName>Beneficiary Customer</FieldName>
+        <DataType>TEXT</DataType>
+        <MaxLength>140</MaxLength>
+        <Format>[/Account]CRLF4*35x</Format>
+        <Mandatory>true</Mandatory>
+        <ExampleValue>/DE89370400440532013000
+DEUTSCHE BANK AG
+FRANKFURT AM MAIN
+GERMANY</ExampleValue>
+      </Field>
+      
+      <!-- Field 11: Remittance Information (70) -->
+      <Field id="FIELD_11">
+        <FieldTag>:70:</FieldTag>
+        <FieldName>Remittance Information</FieldName>
+        <DataType>TEXT</DataType>
+        <MaxLength>140</MaxLength>
+        <Format>4*35x</Format>
+        <Mandatory>false</Mandatory>
+        <ExampleValue>Invoice 2026-001 Payment</ExampleValue>
+      </Field>
+      
+      <!-- Field 12: Details of Charges (71A) -->
+      <Field id="FIELD_12">
+        <FieldTag>:71A:</FieldTag>
+        <FieldName>Details of Charges</FieldName>
+        <DataType>CODE</DataType>
+        <MaxLength>3</MaxLength>
+        <Mandatory>true</Mandatory>
+        <AllowedValues>
+          <Value code="OUR">Our charges</Value>
+          <Value code="BEN">Beneficiary charges</Value>
+          <Value code="SHA">Shared charges</Value>
+        </AllowedValues>
+        <ExampleValue>SHA</ExampleValue>
+      </Field>
+      
+      <!-- Field 13: Sender to Receiver Information (72) -->
+      <Field id="FIELD_13">
+        <FieldTag>:72:</FieldTag>
+        <FieldName>Sender to Receiver Information</FieldName>
+        <DataType>TEXT</DataType>
+        <MaxLength>210</MaxLength>
+        <Format>6*35x</Format>
+        <Mandatory>false</Mandatory>
+        <ExampleValue></ExampleValue>
+      </Field>
+      
+    </Fields>
+  </TargetMessage>
+  
+  <!-- ============================================= -->
+  <!-- FIELD MAPPINGS -->
+  <!-- ============================================= -->
+  <FieldMappings>
+    
+    <!-- Mapping 1: Message Reference -->
+    <Mapping id="MAPPING_01">
+      <SourceField ref="FIELD_01"/>
+      <TargetField ref="FIELD_01"/>
+      
+      <MappingFormula>
+        <Type>EXTRACTION_WITH_TRUNCATION</Type>
+        <Expression>
+          pain_msg_id = source.MsgId
+          
+          // MT103 field 20 max 16 chars, pain.001 MsgId max 35 chars
+          IF length(pain_msg_id) > 16 THEN
+            target.field_20 = substring(pain_msg_id, 1, 16)
+          ELSE
+            target.field_20 = pain_msg_id
+          ENDIF
+        </Expression>
+        <PseudoCode>
+          // Extract message ID from pain.001
+          message_id = source.GrpHdr_MsgId
+          
+          // MT103 field 20 limited to 16 characters
+          if (length(message_id) > 16) then
+            // Truncate with hash suffix for uniqueness
+            base = substring(message_id, 1, 12)
+            hash = calculate_hash_4_chars(message_id)
+            mt103_reference = base + hash
+            
+            log_warning("Message ID truncated from " + message_id + " to " + mt103_reference)
+          else
+            mt103_reference = message_id
+          endif
+          
+          return mt103_reference
+        </PseudoCode>
+      </MappingFormula>
+      
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.GrpHdr_MsgId != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Missing message ID"</ElseAction>
+        </Condition>
+        
+        <Condition priority="2">
+          <Type>LENGTH_VALIDATION</Type>
+          <Expression>length(formatted_reference) &lt;= 16</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>TRUNCATE_WITH_HASH</ElseAction>
+        </Condition>
+        
+        <Condition priority="3">
+          <Type>UNIQUENESS_CHECK</Type>
+          <Expression>NOT exists_in_sent_messages(mt103_reference, today)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>APPEND_SEQUENCE_NUMBER</ElseAction>
+        </Condition>
+        
+        <Condition priority="4">
+          <Type>FORMAT_VALIDATION</Type>
+          <Expression>matches(mt103_reference, "^[A-Z0-9\-_]+$")</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>SANITIZE_INVALID_CHARS</ElseAction>
+        </Condition>
+      </Conditions>
+      
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Payment cannot be sent</ImpactIfFails>
+        <BusinessRationale>
+          Unique reference for payment tracking and reconciliation.
+          Critical for linking pain.001 initiation to MT103 execution.
+        </BusinessRationale>
+        <PerformanceImpact>LOW (string operations)</PerformanceImpact>
+        <DataLossRisk>
+          HIGH - pain.001 MsgId can be 35 chars, MT103 field 20 only 16 chars.
+          Risk of collisions if multiple messages have same first 16 characters.
+          Mitigation: Use hash suffix or sequence number.
+        </DataLossRisk>
+        <MigrationChallenge>
+          Field length mismatch is major challenge. Solutions:
+          1. Truncate + hash (implemented)
+          2. Maintain mapping table (overhead)
+          3. Use sequence numbers (lose original reference)
+        </MigrationChallenge>
+      </General>
+    </Mapping>
+    
+    <!-- Mapping 2: Bank Operation Code -->
+    <Mapping id="MAPPING_02">
+      <SourceField ref="FIELD_18"/>
+      <TargetField ref="FIELD_02"/>
+      
+      <MappingFormula>
+        <Type>CODE_TRANSLATION_WITH_DEFAULT</Type>
+        <Expression>
+          purpose_code = source.Purp_Cd
+          
+          SWITCH purpose_code:
+            CASE "SALA": target.field_23B = "SPAY"
+            CASE "SUPP": target.field_23B = "CRED"
+            CASE "TRAD": target.field_23B = "CRTS"
+            DEFAULT: target.field_23B = "CRED"
+          END_SWITCH
+        </Expression>
+        <PseudoCode>
+          // ISO 20022 has rich purpose codes, MT103 has limited bank op codes
+          purpose_code = source.PmtInf_CdtTrfTxInf_Purp_Cd
+          
+          // Mapping table
+          code_map = {
+            "SALA": "SPAY",   // Salary → Salary Payment
+            "PENS": "SPAY",   // Pension → Salary Payment
+            "SUPP": "CRED",   // Supplier → Credit Transfer
+            "TRAD": "CRTS",   // Trade → Credit Transfer Settlement
+            "CASH": "CRED",   // Cash Management → Credit Transfer
+            "LOAN": "CRED",   // Loan → Credit Transfer
+            "OTHR": "CRED"    // Other → Credit Transfer
+          }
+          
+          if (purpose_code != null AND code_map.contains(purpose_code)) then
+            bank_op_code = code_map[purpose_code]
+          else
+            // Default to generic credit transfer
+            bank_op_code = "CRED"
+            log_info("Purpose code " + purpose_code + " mapped to default CRED")
+          endif
+          
+          return bank_op_code
+        </PseudoCode>
+      </MappingFormula>
+      
+      <Conditions>
+        <Condition priority="1">
+          <Type>CODE_MAPPING</Type>
+          <Expression>purpose_code IN known_purpose_codes OR purpose_code is null</Expression>
+          <Action>MAP_TO_BANK_OP_CODE</Action>
+          <ElseAction>USE_DEFAULT ("CRED")</ElseAction>
+        </Condition>
+        
+        <Condition priority="2">
+          <Type>VALIDATION</Type>
+          <Expression>mapped_code IN ["CRED", "CRTS", "SPAY", "SPRI"]</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>FORCE_TO_CRED</ElseAction>
+        </Condition>
+      </Conditions>
+      
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>
+          Payment proceeds but with generic classification.
+          May impact beneficiary's reconciliation.
+        </ImpactIfFails>
+        <BusinessRationale>
+          Indicates type of payment for proper processing and accounting.
+        </BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <DataLossRisk>
+          MEDIUM - ISO 20022 has 100+ purpose codes, MT103 has ~10 bank op codes.
+          Granular payment purpose information is lost.
+        </DataLossRisk>
+      </General>
+    </Mapping>
+    
+    <!-- Mapping 3: Value Date, Currency, Amount -->
+    <Mapping id="MAPPING_03">
+      <SourceField ref="FIELD_05"/>
+      <TargetField ref="FIELD_03"/>
+      <AdditionalSourceFields>
+        <SourceField ref="FIELD_10"/>
+      </AdditionalSourceFields>
+      
+      <MappingFormula>
+        <Type>COMPOSITE_FIELD_CONSTRUCTION</Type>
+        <Expression>
+          // Extract components
+          exec_date = source.ReqdExctnDt_Dt
+          currency = source.InstdAmt_Ccy
+          amount = source.InstdAmt_value
+          
+          // Format date: YYYY-MM-DD → YYMMDD
+          date_yy = format_date(exec_date, "YYMMDD")
+          
+          // Format amount: 15000.00 → 15000,00 (SWIFT uses comma)
+          amount_swift = format_amount_swift(amount)
+          
+          // Construct field 32A: YYMMDD + CCY + AMOUNT
+          target.field_32A = date_yy + currency + amount_swift
+        </Expression>
+        <PseudoCode>
+          // Get execution date
+          exec_date = source.PmtInf_ReqdExctnDt_Dt  // "2026-02-03"
+          
+          // Convert YYYY-MM-DD to YYMMDD
+          year = substring(exec_date, 3, 2)   // "26"
+          month = substring(exec_date, 6, 2)  // "02"
+          day = substring(exec_date, 9, 2)    // "03"
+          date_yymmdd = year + month + day    // "260203"
+          
+          // Get currency
+          currency = source.PmtInf_CdtTrfTxInf_Amt_InstdAmt["@Ccy"]  // "EUR"
+          
+          // Get amount
+          amount_decimal = source.PmtInf_CdtTrfTxInf_Amt_InstdAmt["#text"]  // 15000.00
+          
+          // Convert dot to comma for SWIFT format
+          amount_string = to_string(amount_decimal)
+          amount_swift = replace(amount_string, ".", ",")  // "15000,00"
+          
+          // Construct composite field
+          field_32a = date_yymmdd + currency + amount_swift  // "260203EUR15000,00"
+          
+          return field_32a
+        </PseudoCode>
+      </MappingFormula>
+      
+      <Conditions>
+        <Condition priority="1">
+          <Type>DATE_VALIDATION</Type>
+          <Expression>is_valid_date(exec_date)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Invalid execution date"</ElseAction>
+        </Condition>
+        
+        <Condition priority="2">
+          <Type>DATE_RANGE_CHECK</Type>
+          <Expression>exec_date >= today AND exec_date &lt;= today + 30_days</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Execution date out of acceptable range"</ElseAction>
+        </Condition>
+        
+        <Condition priority="3">
+          <Type>CURRENCY_VALIDATION</Type>
+          <Expression>is_valid_iso4217(currency)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Invalid currency code"</ElseAction>
+        </Condition>
+        
+        <Condition priority="4">
+          <Type>AMOUNT_VALIDATION</Type>
+          <Expression>amount > 0 AND amount &lt; 999999999999.99</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Amount out of valid range"</ElseAction>
+        </Condition>
+        
+        <Condition priority="5">
+          <Type>DECIMAL_PRECISION</Type>
+          <Expression>decimal_places(amount) &lt;= 2</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>ROUND to 2 decimals AND LOG warning</ElseAction>
+        </Condition>
+      </Conditions>
+      
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Payment rejected or wrong amount/date</ImpactIfFails>
+        <BusinessRationale>
+          Core financial details - any error causes financial loss or regulatory breach.
+        </BusinessRationale>
+        <PerformanceImpact>LOW (string formatting)</PerformanceImpact>
+        <AccuracyRequirement>
+          Amount must be exact. Date must preserve original value.
+          No rounding errors acceptable.
+        </AccuracyRequirement>
+        <FormatNote>
+          ISO 20022: Decimal point notation (15000.00)
+          SWIFT MT: Comma notation (15000,00)
+          Conversion is critical.
+        </FormatNote>
+      </General>
+    </Mapping>
+    
+    <!-- Mapping 4: Ordering Customer (50K) -->
+    <Mapping id="MAPPING_04">
+      <SourceField ref="FIELD_06"/>
+      <TargetField ref="FIELD_04"/>
+      <AdditionalSourceFields>
+        <SourceField ref="FIELD_07"/>
+        <SourceField ref="FIELD_08"/>
+      </AdditionalSourceFields>
+      
+      <MappingFormula>
+        <Type>STRUCTURED_TO_UNSTRUCTURED</Type>
+        <Expression>
+          // Components
+          account = source.DbtrAcct_Id_IBAN
+          name = source.Dbtr_Nm
+          address_structured = source.Dbtr_PstlAdr
+          
+          // Build field 50K
+          line1 = "/" + account if account != null else ""
+          line2 = truncate(name, 35)
+          line3 = format_address_line1(address_structured)
+          line4 = format_address_line2(address_structured)
+          
+          target.field_50K = join_lines([line1, line2, line3, line4])
+        </Expression>
+        <PseudoCode>
+          // Get account (optional)
+          iban = source.PmtInf_DbtrAcct_Id_IBAN
+          
+          if (iban != null) then
+            line1 = "/" + iban
+          else
+            line1 = ""
+          endif
+          
+          // Get name (mandatory)
+          debtor_name = source.PmtInf_Dbtr_Nm
+          
+          // Truncate to 35 chars per line
+          if (length(debtor_name) > 35) then
+            line2 = substring(debtor_name, 1, 35)
+            log_warning("Debtor name truncated")
+          else
+            line2 = debtor_name
+          endif
+          
+          // Get structured address
+          addr = source.PmtInf_Dbtr_PstlAdr
+          
+          if (addr != null) then
+            // Format: Street + Building
+            street = addr.StrtNm
+            building = addr.BldgNb
+            if (building != null AND street != null) then
+              line3 = building + " " + street
+            else if (street != null) then
+              line3 = street
+            else
+              line3 = ""
+            endif
+            
+            // Format: PostCode + Town + Country
+            postcode = addr.PstCd
+            town = addr.TwnNm
+            country = addr.Ctry
+            
+            address_parts = []
+            if (postcode != null) then
+              address_parts.add(postcode)
+            endif
+            if (town != null) then
+              address_parts.add(town)
+            endif
+            if (country != null) then
+              address_parts.add(country)
+            endif
+            
+            line4 = join(address_parts, " ")
+          else
+            line3 = ""
+            line4 = ""
+          endif
+          
+          // Truncate lines to 35 chars
+          line3 = truncate_to_35(line3)
+          line4 = truncate_to_35(line4)
+          
+          // Construct field 50K (4 lines max)
+          field_50k = ""
+          if (line1 != "") then
+            field_50k += line1 + "\n"
+          endif
+          field_50k += line2 + "\n"
+          if (line3 != "") then
+            field_50k += line3 + "\n"
+          endif
+          if (line4 != "") then
+            field_50k += line4
+          endif
+          
+          return field_50k
+        </PseudoCode>
+      </MappingFormula>
+      
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.Dbtr_Nm != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Missing debtor name"</ElseAction>
+        </Condition>
+        
+        <Condition priority="2">
+          <Type>LENGTH_CHECK</Type>
+          <Expression>total_length &lt;= 140 (4 lines * 35 chars)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>TRUNCATE_LINES</ElseAction>
+        </Condition>
+        
+        <Condition priority="3">
+          <Type>IBAN_VALIDATION</Type>
+          <Expression>iban is null OR is_valid_iban(iban)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Invalid IBAN"</ElseAction>
+        </Condition>
+        
+        <Condition priority="4">
+          <Type>SANCTIONS_SCREENING</Type>
+          <Expression>NOT is_sanctioned(debtor_name)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>BLOCK AND ALERT</ElseAction>
+        </Condition>
+      </Conditions>
+      
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Payment blocked - compliance violation</ImpactIfFails>
+        <BusinessRationale>
+          Identifies payer for AML/KYC compliance and sanctions screening.
+        </BusinessRationale>
+        <PerformanceImpact>MEDIUM (address formatting + sanctions check)</PerformanceImpact>
+        <DataLossRisk>
+          HIGH - ISO 20022 structured address (multiple fields) → MT103 unstructured (4x35 lines).
+          Address details may be truncated or lost. E.g.:
+          - ISO: StrtNm, BldgNb, PstCd, TwnNm, Ctry, CtrySubDvsn, AdrLine
+          - MT103: 4 lines of 35 chars total
+        </DataLossRisk>
+        <MigrationChallenge>
+          MAJOR: Structured to unstructured conversion.
+          - Must intelligently concatenate address components
+          - Prioritize critical information (name, country)
+          - Accept potential data loss for less critical fields
+        </MigrationChallenge>
+      </General>
+    </Mapping>
+    
+    <!-- Mapping 5: Ordering Institution -->
+    <Mapping id="MAPPING_05">
+      <SourceField ref="FIELD_09"/>
+      <TargetField ref="FIELD_05"/>
+      
+      <MappingFormula>
+        <Type>DIRECT_COPY_WITH_VALIDATION</Type>
+        <Expression>
+          debtor_agent_bic = source.DbtrAgt_FinInstnId_BICFI
+          
+          IF debtor_agent_bic != null THEN
+            target.field_52A = debtor_agent_bic
+          ELSE
+            // Optional field - can be empty
+            target.field_52A = null
+          ENDIF
+        </Expression>
+        <PseudoCode>
+          // Get debtor agent BIC
+          bic = source.PmtInf_DbtrAgt_FinInstnId_BICFI
+          
+          if (bic != null) then
+            // Validate BIC format
+            if (is_valid_bic(bic)) then
+              ordering_institution = bic
+            else
+              throw error "Invalid debtor agent BIC"
+            endif
+          else
+            // Field is optional
+            ordering_institution = null
+          endif
+          
+          return ordering_institution
+        </PseudoCode>
+      </MappingFormula>
+      
+      <Conditions>
+        <Condition priority="1">
+          <Type>OPTIONAL_FIELD</Type>
+          <Expression>true</Expression>
+          <Action>PROCEED if present, skip if null</Action>
+          <ElseAction>N/A</ElseAction>
+        </Condition>
+        
+        <Condition priority="2">
+          <Type>BIC_VALIDATION</Type>
+          <Expression>bic is null OR is_valid_bic_format(bic)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Invalid BIC"</ElseAction>
+        </Condition>
+      </Conditions>
+      
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Payment may be routed suboptimally</ImpactIfFails>
+        <BusinessRationale>Identifies ordering bank for routing</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+      </General>
+    </Mapping>
+    
+    <!-- Mapping 6-8: Intermediary Banks (Usually Empty) -->
+    <Mapping id="MAPPING_06_08">
+      <SourceField ref="NONE"/>
+      <TargetFields>
+        <TargetField ref="FIELD_06"/>
+        <TargetField ref="FIELD_07"/>
+        <TargetField ref="FIELD_08"/>
+      </TargetFields>
+      
+      <MappingFormula>
+        <Type>OPTIONAL_ENRICHMENT</Type>
+        <Expression>
+          // pain.001 doesn't typically contain intermediary routing
+          // These would be added by payment hub based on routing tables
+          target.field_53A = null  // Sender's Correspondent
+          target.field_54A = null  // Receiver's Correspondent
+          target.field_56A = null  // Intermediary
+        </Expression>
+        <PseudoCode>
+          // pain.001 is customer-to-bank message
+          // It doesn't contain interbank routing instructions
+          // Payment hub determines routing based on:
+          // - Destination BIC
+          // - Currency
+          // - Correspondent banking agreements
+          
+          // For now, leave empty (will be populated by payment hub)
+          return null
+        </PseudoCode>
+      </MappingFormula>
+      
+      <Conditions>
+        <Condition priority="1">
+          <Type>ROUTING_ENRICHMENT</Type>
+          <Expression>true</Expression>
+          <Action>SKIP (handled by payment hub)</Action>
+          <ElseAction>N/A</ElseAction>
+        </Condition>
+      </Conditions>
+      
+      <General>
+        <Criticality>LOW</Criticality>
+        <ImpactIfFails>N/A - handled by payment hub</ImpactIfFails>
+        <BusinessRationale>
+          Intermediary routing determined by payment hub, not customer initiation.
+        </BusinessRationale>
+        <PerformanceImpact>NONE</PerformanceImpact>
+        <Note>
+          Payment hub will enrich with routing instructions based on:
+          - Destination bank connectivity
+          - Currency corridors
+          - Correspondent relationships
+        </Note>
+      </General>
+    </Mapping>
+    
+    <!-- Mapping 9: Account With Institution (Creditor Agent) -->
+    <Mapping id="MAPPING_09">
+      <SourceField ref="FIELD_11"/>
+      <TargetField ref="FIELD_09"/>
+      
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>
+          creditor_agent_bic = source.CdtrAgt_FinInstnId_BICFI
+          target.field_57A = creditor_agent_bic
+        </Expression>
+        <PseudoCode>
+          // Get creditor agent BIC
+          bic = source.PmtInf_CdtTrfTxInf_CdtrAgt_FinInstnId_BICFI
+          
+          if (bic != null) then
+            if (is_valid_bic(bic)) then
+              account_with_institution = bic
+            else
+              throw error "Invalid creditor agent BIC"
+            endif
+          else
+            // Try to derive from creditor account (if IBAN)
+            iban = source.PmtInf_CdtTrfTxInf_CdtrAcct_Id_IBAN
+            if (iban != null) then
+              // Extract bank code from IBAN and lookup BIC
+              account_with_institution = lookup_bic_from_iban(iban)
+            else
+              throw error "Cannot determine beneficiary bank"
+            endif
+          endif
+          
+          return account_with_institution
+        </PseudoCode>
+      </MappingFormula>
+      
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>creditor_agent_bic != null OR creditor_iban != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Cannot determine beneficiary bank"</ElseAction>
+        </Condition>
+        
+        <Condition priority="2">
+          <Type>BIC_VALIDATION</Type>
+          <Expression>is_valid_bic(creditor_agent_bic)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Invalid BIC"</ElseAction>
+        </Condition>
+        
+        <Condition priority="3">
+          <Type>REACHABILITY_CHECK</Type>
+          <Expression>is_reachable_via_swift(creditor_agent_bic)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Beneficiary bank not reachable"</ElseAction>
+        </Condition>
+      </Conditions>
+      
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Payment cannot be delivered</ImpactIfFails>
+        <BusinessRationale>Destination bank for payment delivery</BusinessRationale>
+        <PerformanceImpact>MEDIUM (BIC lookup if needed)</PerformanceImpact>
+      </General>
+    </Mapping>
+    
+    <!-- Mapping 10: Beneficiary Customer -->
+    <Mapping id="MAPPING_10">
+      <SourceField ref="FIELD_12"/>
+      <TargetField ref="FIELD_10"/>
+      <AdditionalSourceFields>
+        <SourceField ref="FIELD_13"/>
+        <SourceField ref="FIELD_14"/>
+      </AdditionalSourceFields>
+      
+      <MappingFormula>
+        <Type>STRUCTURED_TO_UNSTRUCTURED</Type>
+        <Expression>
+          // Same logic as ordering customer (field 50K)
+          account = source.CdtrAcct_Id_IBAN
+          name = source.Cdtr_Nm
+          address_structured = source.Cdtr_PstlAdr
+          
+          line1 = "/" + account if account != null
+          line2 = truncate(name, 35)
+          line3 = format_address_line1(address_structured)
+          line4 = format_address_line2(address_structured)
+          
+          target.field_59 = join_lines([line1, line2, line3, line4])
+        </Expression>
+        <PseudoCode>
+          // Identical logic to Mapping 4 but for creditor
+          iban = source.PmtInf_CdtTrfTxInf_CdtrAcct_Id_IBAN
+          
+          if (iban != null) then
+            line1 = "/" + iban
+          else
+            line1 = ""
+          endif
+          
+          creditor_name = source.PmtInf_CdtTrfTxInf_Cdtr_Nm
+          line2 = truncate_to_35(creditor_name)
+          
+          addr = source.PmtInf_CdtTrfTxInf_Cdtr_PstlAdr
+          
+          // Format address (same logic as debtor)
+          if (addr != null) then
+            line3 = format_address_line_from_structured(addr, "line1")
+            line4 = format_address_line_from_structured(addr, "line2")
+          else
+            line3 = ""
+            line4 = ""
+          endif
+          
+          field_59 = construct_field([line1, line2, line3, line4])
+          
+          return field_59
+        </PseudoCode>
+      </MappingFormula>
+      
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.Cdtr_Nm != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Missing creditor name"</ElseAction>
+        </Condition>
+        
+        <Condition priority="2">
+          <Type>SANCTIONS_SCREENING</Type>
+          <Expression>NOT is_sanctioned(creditor_name)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>BLOCK AND ALERT</ElseAction>
+        </Condition>
+        
+        <Condition priority="3">
+          <Type>NAME_ACCOUNT_MATCH</Type>
+          <Expression>name_matches_account_holder(name, account)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>FLAG for fraud review</ElseAction>
+        </Condition>
+      </Conditions>
+      
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Payment blocked or sent to wrong beneficiary</ImpactIfFails>
+        <BusinessRationale>Identifies payee for sanctions screening and fraud detection</BusinessRationale>
+        <PerformanceImpact>MEDIUM (sanctions + fraud checks)</PerformanceImpact>
+        <DataLossRisk>
+          HIGH - Same as debtor (structured to unstructured address)
+        </DataLossRisk>
+      </General>
+    </Mapping>
+    
+    <!-- Mapping 11: Remittance Information -->
+    <Mapping id="MAPPING_11">
+      <SourceField ref="FIELD_15"/>
+      <TargetField ref="FIELD_11"/>
+      <AdditionalSourceFields>
+        <SourceField ref="FIELD_16"/>
+      </AdditionalSourceFields>
+      
+      <MappingFormula>
+        <Type>UNSTRUCTURED_WITH_STRUCTURED_FALLBACK</Type>
+        <Expression>
+          // Priority 1: Unstructured remittance
+          IF source.RmtInf_Ustrd != null THEN
+            remittance = source.RmtInf_Ustrd
+          // Priority 2: Structured remittance (convert to text)
+          ELSE IF source.RmtInf_Strd != null THEN
+            remittance = format_structured_remittance(source.RmtInf_Strd)
+          ELSE
+            remittance = null
+          ENDIF
+          
+          // Truncate to 140 chars (4 lines * 35)
+          IF length(remittance) > 140 THEN
+            target.field_70 = substring(remittance, 1, 140)
+          ELSE
+            target.field_70 = remittance
+          ENDIF
+        </Expression>
+        <PseudoCode>
+          // Check for unstructured remittance first
+          ustrd = source.PmtInf_CdtTrfTxInf_RmtInf_Ustrd
+          
+          if (ustrd != null AND ustrd != "") then
+            remittance_text = ustrd
+          else
+            // Try structured remittance
+            strd = source.PmtInf_CdtTrfTxInf_RmtInf_Strd
+            
+            if (strd != null) then
+              // Extract structured elements
+              creditor_ref = strd.CdtrRefInf_Ref
+              additional_info = strd.AddtlRmtInf
+              
+              // Format as text
+              parts = []
+              if (creditor_ref != null) then
+                parts.add("REF: " + creditor_ref)
+              endif
+              if (additional_info != null) then
+                parts.add(additional_info)
+              endif
+              
+              remittance_text = join(parts, " ")
+            else
+              remittance_text = null
+            endif
+          endif
+          
+          // Validate length and split into lines
+          if (remittance_text != null) then
+            if (length(remittance_text) > 140) then
+              remittance_text = substring(remittance_text, 1, 140)
+              log_warning("Remittance information truncated")
+            endif
+            
+            // Split into 35-char lines for MT format
+            field_70 = split_into_lines(remittance_text, 35, 4)
+          else
+            field_70 = null
+          endif
+          
+          return field_70
+        </PseudoCode>
+      </MappingFormula>
+      
+      <Conditions>
+        <Condition priority="1">
+          <Type>OPTIONAL_FIELD</Type>
+          <Expression>true</Expression>
+          <Action>PROCEED if present</Action>
+          <ElseAction>SKIP</ElseAction>
+        </Condition>
+        
+        <Condition priority="2">
+          <Type>LENGTH_CHECK</Type>
+          <Expression>length(remittance) &lt;= 140</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>TRUNCATE AND LOG</ElseAction>
+        </Condition>
+        
+        <Condition priority="3">
+          <Type>CONTENT_SCREENING</Type>
+          <Expression>NOT contains_prohibited_keywords(remittance)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>FLAG for review</ElseAction>
+        </Condition>
+      </Conditions>
+      
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>
+          Loss of payment context - impacts reconciliation.
+          Payment still processable.
+        </ImpactIfFails>
+        <BusinessRationale>
+          Payment purpose for invoice matching and reconciliation.
+        </BusinessRationale>
+        <PerformanceImpact>LOW</PerformanceImpact>
+        <DataLossRisk>
+          MEDIUM - ISO 20022 structured remittance (machine-readable invoices, references)
+          → MT103 unstructured text (140 chars max).
+          Rich structured data is flattened to text.
+        </DataLossRisk>
+        <MigrationChallenge>
+          ISO 20022 Structured Remittance elements:
+          - Invoices with dates, amounts, descriptions
+          - Tax information
+          - Multiple document references
+          
+          All must be condensed to 140 characters of free text.
+          Significant information loss for complex structured remittance.
+        </MigrationChallenge>
+      </General>
+    </Mapping>
+    
+    <!-- Mapping 12: Charge Bearer -->
+    <Mapping id="MAPPING_12">
+      <SourceField ref="FIELD_17"/>
+      <TargetField ref="FIELD_12"/>
+      
+      <MappingFormula>
+        <Type>CODE_TRANSLATION</Type>
+        <Expression>
+          iso_charge_code = source.ChrgBr
+          
+          SWITCH iso_charge_code:
+            CASE "DEBT": target.field_71A = "OUR"
+            CASE "CRED": target.field_71A = "BEN"
+            CASE "SHAR": target.field_71A = "SHA"
+            CASE "SLEV": target.field_71A = "SHA"  // Service level → Shared
+            DEFAULT: target.field_71A = "SHA"
+          END_SWITCH
+        </Expression>
+        <PseudoCode>
+          // Reverse of MT103 to pacs.008 mapping
+          iso_code = source.PmtInf_ChrgBr
+          
+          code_map = {
+            "DEBT": "OUR",
+            "CRED": "BEN",
+            "SHAR": "SHA",
+            "SLEV": "SHA"   // SLEV doesn't exist in MT103
+          }
+          
+          if (iso_code != null AND code_map.contains(iso_code)) then
+            mt_code = code_map[iso_code]
+          else
+            // Default to shared
+            mt_code = "SHA"
+          endif
+          
+          return mt_code
+        </PseudoCode>
+      </MappingFormula>
+      
+      <Conditions>
+        <Condition priority="1">
+          <Type>CODE_VALIDATION</Type>
+          <Expression>iso_code IN ["DEBT", "CRED", "SHAR", "SLEV"] OR iso_code is null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>USE_DEFAULT ("SHA")</ElseAction>
+        </Condition>
+        
+        <Condition priority="2">
+          <Type>REGULATORY_CHECK</Type>
+          <Expression>charge_bearer_compliant_with_regulations(mt_code, currency, destination)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>OVERRIDE with compliant code</ElseAction>
+        </Condition>
+      </Conditions>
+      
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>Incorrect charge allocation</ImpactIfFails>
+        <BusinessRationale>Determines who pays charges</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+      </General>
+    </Mapping>
+    
+    <!-- Mapping 13: Sender to Receiver Information -->
+    <Mapping id="MAPPING_13">
+      <SourceField ref="NONE"/>
+      <TargetField ref="FIELD_13"/>
+      
+      <MappingFormula>
+        <Type>OPTIONAL_ENRICHMENT</Type>
+        <Expression>
+          // pain.001 doesn't have bank-to-bank instructions
+          // Field 72 used for operational instructions between banks
+          // Leave empty unless payment hub needs to add routing instructions
+          target.field_72 = null
+        </Expression>
+        <PseudoCode>
+          // Field 72 is for bank-to-bank communication
+          // pain.001 is customer-to-bank, so no equivalent field
+          // Payment hub may populate based on:
+          // - Routing requirements
+          // - Compliance codes
+          // - Special handling instructions
+          
+          return null  // Will be enriched by payment hub if needed
+        </PseudoCode>
+      </MappingFormula>
+      
+      <Conditions>
+        <Condition priority="1">
+          <Type>ALWAYS_TRUE</Type>
+          <Expression>true</Expression>
+          <Action>SKIP (optional field)</Action>
+          <ElseAction>N/A</ElseAction>
+        </Condition>
+      </Conditions>
+      
+      <General>
+        <Criticality>LOW</Criticality>
+        <ImpactIfFails>N/A</ImpactIfFails>
+        <BusinessRationale>Bank-to-bank instructions - not in customer message</BusinessRationale>
+        <PerformanceImpact>NONE</PerformanceImpact>
+      </General>
+    </Mapping>
+    
+  </FieldMappings>
+  
+  <!-- ============================================= -->
+  <!-- VALIDATION RULES -->
+  <!-- ============================================= -->
+  <ValidationRules>
+    <PreConversionRules>
+      <Rule id="PRE_001" type="SCHEMA_VALIDATION">
+        <Description>Validate pain.001 XML against schema</Description>
+        <Schema>pain.001.001.09.xsd</Schema>
+        <Action>REJECT if schema invalid</Action>
+      </Rule>
+      
+      <Rule id="PRE_002" type="MANDATORY_FIELDS">
+        <Description>Check mandatory pain.001 fields</Description>
+        <Fields>MsgId, CreDtTm, PmtInfId, Dbtr/Nm, Cdtr/Nm, InstdAmt</Fields>
+        <Action>REJECT if missing</Action>
+      </Rule>
+      
+      <Rule id="PRE_003" type="SINGLE_TRANSACTION_CHECK">
+        <Description>MT103 supports only single transaction</Description>
+        <Condition>count(CdtTrfTxInf) == 1</Condition>
+        <Action>REJECT if multiple transactions (use MT102 instead)</Action>
+      </Rule>
+      
+      <Rule id="PRE_004" type="AMOUNT_LIMIT">
+        <Description>Check amount within MT103 limits</Description>
+        <Condition>amount &lt; 999999999999.99</Condition>
+        <Action>REJECT if exceeds limit</Action>
+      </Rule>
+    </PreConversionRules>
+    
+    <PostConversionRules>
+      <Rule id="POST_001" type="SWIFT_FORMAT_VALIDATION">
+        <Description>Validate MT103 SWIFT format</Description>
+        <Action>REJECT if format invalid</Action>
+      </Rule>
+      
+      <Rule id="POST_002" type="DATA_LOSS_CHECK">
+        <Description>Warn if significant data lost in conversion</Description>
+        <Checks>
+          <Check>Truncated fields (name, address, remittance)</Check>
+          <Check>Lost structured remittance details</Check>
+          <Check>Multiple purpose codes → single bank op code</Check>
+        </Checks>
+        <Action>LOG warnings for audit</Action>
+      </Rule>
+      
+      <Rule id="POST_003" type="COMPLETENESS">
+        <Description>Ensure critical fields populated</Description>
+        <Fields>20, 23B, 32A, 50K, 57A, 59, 71A</Fields>
+        <Action>REJECT if critical field missing</Action>
+      </Rule>
+    </PostConversionRules>
+  </ValidationRules>
+  
+  <!-- ============================================= -->
+  <!-- ERROR HANDLING -->
+  <!-- ============================================= -->
+  <ErrorHandling>
+    <ErrorCategories>
+      <Category name="DATA_TRUNCATION_WARNING" severity="WARNING" action="PROCEED_WITH_LOG">
+        <Description>Data truncated to fit MT103 field limits</Description>
+        <Examples>
+          <Example>pain.001 MsgId 35 chars → MT103 field 20 (16 chars)</Example>
+          <Example>Structured address → 4x35 unstructured lines</Example>
+          <Example>Structured remittance → 140 char text</Example>
+        </Examples>
+        <RecoveryAction>LOG truncation details for audit and proceed</RecoveryAction>
+      </Category>
+      
+      <Category name="DATA_LOSS_WARNING" severity="WARNING" action="PROCEED_WITH_LOG">
+        <Description>Structured data lost in conversion to unstructured format</Description>
+        <RecoveryAction>LOG what was lost and proceed</RecoveryAction>
+      </Category>
+      
+      <Category name="MAPPING_ERROR" severity="ERROR" action="REJECT">
+        <Description>Cannot map required field</Description>
+        <RecoveryAction>MANUAL intervention required</RecoveryAction>
+      </Category>
+      
+      <Category name="VALIDATION_ERROR" severity="ERROR" action="REJECT">
+        <Description>MT103 validation failed</Description>
+        <RecoveryAction>Fix source data and resubmit</RecoveryAction>
+      </Category>
+      
+      <Category name="SANCTIONS_HIT" severity="CRITICAL" action="BLOCK">
+        <Description>Sanctions screening match</Description>
+        <RecoveryAction>COMPLIANCE review required</RecoveryAction>
+        <Notification>IMMEDIATE alert</Notification>
+      </Category>
+    </ErrorCategories>
+    
+    <DataLossTracking>
+      <Purpose>Track information lost in ISO 20022 → SWIFT MT conversion</Purpose>
+      <TrackingFields>
+        <Field name="original_msg_id" description="Full pain.001 MsgId before truncation"/>
+        <Field name="truncated_fields" description="List of fields that were truncated"/>
+        <Field name="lost_structured_data" description="Structured elements converted to text"/>
+        <Field name="address_components_lost" description="Address fields that didn't fit"/>
+      </TrackingFields>
+      <Storage>
+        <Database table="conversion_audit_log" retention="7 years"/>
+      </Storage>
+      <Purpose>
+        Enable reconstruction of original pain.001 if needed for investigations or disputes.
+      </Purpose>
+    </DataLossTracking>
+  </ErrorHandling>
+  
+  <!-- ============================================= -->
+  <!-- PERFORMANCE &amp; MONITORING -->
+  <!-- ============================================= -->
+  <PerformanceMetrics>
+    <SLA>
+      <ConversionTime target="180ms" max="2000ms" percentile="99"/>
+      <SuccessRate target="99.9%" measurement="DAILY"/>
+      <Throughput target="8000 messages/second"/>
+      <DataLossRate target="<5%" measurement="Significant data loss incidents"/>
+    </SLA>
+    
+    <Monitoring>
+      <Metric name="conversion_duration_ms" type="HISTOGRAM"/>
+      <Metric name="data_truncation_count" type="COUNTER"/>
+      <Metric name="structured_to_unstructured_loss_rate" type="GAUGE"/>
+      <Metric name="sanctions_screening_hits" type="COUNTER"/>
+      
+      <Alert condition="data_truncation_count > 1000/hour" severity="WARNING"/>
+      <Alert condition="conversion_success_rate < 0.999" severity="CRITICAL"/>
+    </Monitoring>
+  </PerformanceMetrics>
+  
+  <!-- ============================================= -->
+  <!-- AUDIT &amp; COMPLIANCE -->
+  <!-- ============================================= -->
+  <AuditConfiguration>
+    <LoggingPolicy>
+      <LogLevel>INFO</LogLevel>
+      <LogFields>
+        pain001_msg_id, mt103_reference, conversion_status, timestamp,
+        data_truncated (boolean), truncated_fields (list),
+        data_loss_details, sanctions_check_result
+      </LogFields>
+      <RetentionPeriod>7_YEARS</RetentionPeriod>
+    </LoggingPolicy>
+    
+    <ComplianceRequirements>
+      <Requirement regulation="Data_Integrity">
+        <Mandate>Track all data loss in conversion</Mandate>
+        <Implementation>Log truncations and structural changes</Implementation>
+      </Requirement>
+      
+      <Requirement regulation="AML_CFT">
+        <Mandate>Sanctions screening on all parties</Mandate>
+        <Implementation>Screen debtor and creditor names before conversion</Implementation>
+      </Requirement>
+    </ComplianceRequirements>
+    
+    <ConversionAudit>
+      <TrackChanges>
+        <Change type="FIELD_TRUNCATION" log_details="true"/>
+        <Change type="STRUCTURED_TO_UNSTRUCTURED" log_details="true"/>
+        <Change type="CODE_TRANSLATION" log_details="true"/>
+        <Change type="DATA_ENRICHMENT" log_details="true"/>
+      </TrackChanges>
+      
+      <AuditReport frequency="MONTHLY">
+        <Metric>Total conversions</Metric>
+        <Metric>Truncation incidents</Metric>
+        <Metric>Average data loss percentage</Metric>
+        <Metric>Sanctions hits</Metric>
+        <Metric>Manual intervention rate</Metric>
+      </AuditReport>
+    </ConversionAudit>
+  </AuditConfiguration>
+  
+</MessageMapping>

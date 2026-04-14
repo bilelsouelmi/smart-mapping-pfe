@@ -1,0 +1,1394 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MessageMapping version="1.0">
+
+  <!-- ============================================= -->
+  <!-- GENERAL INFORMATION -->
+  <!-- ============================================= -->
+  <GeneralInformation>
+    <MappingId>MAP_MT103_PACS008_001</MappingId>
+    <MappingName>MT103 to pacs.008 Conversion</MappingName>
+    <Version>2.0.0</Version>
+    <CreatedDate>2026-02-03</CreatedDate>
+    <CreatedBy>Bilel SOUELMI - Vermeg FinTech Team</CreatedBy>
+    <LastModifiedDate>2026-02-03</LastModifiedDate>
+    <Status>ACTIVE</Status>
+
+    <BusinessContext>
+      <Description>
+        Critical migration from SWIFT MT103 (legacy format) to ISO 20022 pacs.008.001.08
+        (FIToFICustomerCreditTransfer). Part of the global SWIFT migration initiative
+        where all MT messages will be replaced by MX (ISO 20022) by November 2025.
+        MT103 is used for single customer credit transfers, while pacs.008 is its ISO 20022
+        equivalent with enhanced structured data, better compliance support, and richer
+        remittance information capabilities.
+      </Description>
+      <UseCases>
+        <UseCase>Cross-border customer payments</UseCase>
+        <UseCase>Corporate-to-corporate payments</UseCase>
+        <UseCase>Salary payments</UseCase>
+        <UseCase>Invoice settlements</UseCase>
+        <UseCase>Trade finance payments</UseCase>
+      </UseCases>
+      <ApplicableDomains>Payments Hub, Treasury Operations, Corporate Banking, Retail Banking, Trade Finance, Compliance, AML Screening</ApplicableDomains>
+    </BusinessContext>
+
+    <TechnicalSpecifications>
+      <SourceFormat>SWIFT MT103 (ISO 15022)</SourceFormat>
+      <TargetFormat>ISO 20022 pacs.008.001.08 (XML)</TargetFormat>
+      <ProcessingMode>REAL_TIME</ProcessingMode>
+      <AverageProcessingTime>150ms</AverageProcessingTime>
+      <MaxProcessingTime>1500ms</MaxProcessingTime>
+      <ThroughputCapacity>10000 messages/second</ThroughputCapacity>
+    </TechnicalSpecifications>
+
+    <ComplianceRequirements>
+      <Regulation>EU Sanctions Screening (OFAC, EU Lists)</Regulation>
+      <Regulation>AML/CFT - 4th and 5th Directives</Regulation>
+      <Regulation>PSD2 - Payment Services Directive</Regulation>
+      <Regulation>GDPR - Personal Data Protection</Regulation>
+      <Regulation>FATF - Travel Rule Implementation</Regulation>
+      <Regulation>SOX - Financial Controls</Regulation>
+    </ComplianceRequirements>
+
+    <!-- Global variables shared across all mappings -->
+    <GlobalVariables>
+      <Variable name="MAX_MSG_ID_LENGTH" value="35" type="INTEGER" description="Maximum length of pacs.008 MsgId field"/>
+      <Variable name="MAX_FIELD_20_LENGTH" value="16" type="INTEGER" description="Maximum length of MT103 field 20"/>
+      <Variable name="LARGE_AMOUNT_THRESHOLD" value="10000" currency="EUR" type="DECIMAL" description="Amount above which AML compliance review is triggered"/>
+      <Variable name="MAX_AMOUNT" value="999999999999.99" type="DECIMAL" description="Maximum allowed transaction amount"/>
+      <Variable name="MAX_DECIMAL_PLACES" value="2" type="INTEGER" description="Maximum decimal places for amount fields"/>
+      <Variable name="DUPLICATE_DETECTION_WINDOW_DAYS" value="7" type="INTEGER" description="Lookback window in days for duplicate message detection"/>
+      <Variable name="SANCTIONS_SCREENING_ENABLED" value="true" type="BOOLEAN" description="Whether real-time sanctions screening is active"/>
+      <Variable name="PEP_SCREENING_ENABLED" value="true" type="BOOLEAN" description="Whether PEP screening is active"/>
+      <Variable name="BIC_CACHE_TTL_HOURS" value="24" type="INTEGER" description="BIC directory cache time-to-live in hours"/>
+      <Variable name="PURPOSE_CODE_DERIVATION_MIN_CONFIDENCE" value="0.7" type="DECIMAL" description="Minimum confidence score required to use derived purpose code"/>
+      <Variable name="REMITTANCE_MAX_LENGTH" value="140" type="INTEGER" description="Maximum characters for unstructured remittance information"/>
+      <Variable name="DEFAULT_CHARGE_BEARER" value="SHAR" type="STRING" description="Default ISO 20022 charge bearer when MT103 field 71A is missing"/>
+      <Variable name="AUDIT_RETENTION_YEARS" value="7" type="INTEGER" description="Regulatory minimum audit log retention period in years"/>
+      <Variable name="PROCESSING_TIMEZONE" value="UTC" type="STRING" description="All timestamps generated in this timezone"/>
+      <Variable name="SEPA_CURRENCY" value="EUR" type="STRING" description="Currency requiring SHA charge bearer per EU Regulation 924/2009"/>
+    </GlobalVariables>
+  </GeneralInformation>
+
+  <!-- ============================================= -->
+  <!-- SOURCE MESSAGE STRUCTURE (MT103) -->
+  <!-- ============================================= -->
+  <SourceMessage>
+    <MessageType>MT103</MessageType>
+    <MessageName>Single Customer Credit Transfer</MessageName>
+    <Standard>SWIFT ISO 15022</Standard>
+
+    <Fields>
+
+      <Field id="FIELD_01">
+        <FieldTag>:20:</FieldTag>
+        <FieldName>Sender's Reference</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>16</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Format>ALPHANUMERIC</Format>
+        <Description>Unique reference assigned by the sender to unambiguously identify the message</Description>
+        <ExampleValue>CORPAY2026020301</ExampleValue>
+        <ValidationRules>
+          <Rule>Must be unique per sender per day</Rule>
+          <Rule>Alphanumeric characters only</Rule>
+          <Rule>No special characters except hyphen and underscore</Rule>
+        </ValidationRules>
+      </Field>
+
+      <Field id="FIELD_02">
+        <FieldTag>:23B:</FieldTag>
+        <FieldName>Bank Operation Code</FieldName>
+        <DataType>CODE</DataType>
+        <MaxLength>4</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Format>4!c</Format>
+        <Description>Type of payment instruction</Description>
+        <ExampleValue>CRED</ExampleValue>
+        <AllowedValues>
+          <Value code="CRED">Credit Transfer</Value>
+          <Value code="CRTS">Credit Transfer for Settlement</Value>
+          <Value code="SPAY">Salary Payment</Value>
+        </AllowedValues>
+        <ValidationRules>
+          <Rule>Must be one of the allowed SWIFT codes</Rule>
+        </ValidationRules>
+      </Field>
+
+      <Field id="FIELD_03">
+        <FieldTag>:32A:</FieldTag>
+        <FieldName>Value Date, Currency Code, Interbank Settled Amount</FieldName>
+        <DataType>COMPOSITE</DataType>
+        <Format>YYMMDD[CCY][AMOUNT]</Format>
+        <Mandatory>true</Mandatory>
+        <Components>
+          <Component name="ValueDate" type="DATE" format="YYMMDD" position="1-6"/>
+          <Component name="Currency" type="STRING" format="ISO4217" length="3" position="7-9"/>
+          <Component name="Amount" type="DECIMAL" format="15d" position="10+"/>
+        </Components>
+        <Description>Date, currency and amount of the transaction</Description>
+        <ExampleValue>260203EUR25000,00</ExampleValue>
+        <ValidationRules>
+          <Rule>Date must be valid and not in the past</Rule>
+          <Rule>Currency must be valid ISO 4217 code</Rule>
+          <Rule>Amount must be positive with max 2 decimal places</Rule>
+        </ValidationRules>
+      </Field>
+
+      <Field id="FIELD_04">
+        <FieldTag>:50K:</FieldTag>
+        <FieldName>Ordering Customer (Name and Address)</FieldName>
+        <DataType>TEXT</DataType>
+        <MaxLength>140</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Format>[/Account]CRLF4*35x</Format>
+        <Description>Account number and name/address of the ordering customer (payer)</Description>
+        <ExampleValue>/FR7630006000011234567890189 SOCIETE GENERALE PARIS FRANCE</ExampleValue>
+        <ValidationRules>
+          <Rule>First line can optionally start with account number preceded by /</Rule>
+          <Rule>Maximum 4 lines of 35 characters each for name and address</Rule>
+        </ValidationRules>
+        <ComplianceNote>Critical for AML/KYC - must contain sufficient identification</ComplianceNote>
+      </Field>
+
+      <Field id="FIELD_05">
+        <FieldTag>:52A:</FieldTag>
+        <FieldName>Ordering Institution</FieldName>
+        <DataType>BIC</DataType>
+        <Format>[/Account]CRLF BIC</Format>
+        <Mandatory>false</Mandatory>
+        <Description>Financial institution of the ordering customer</Description>
+        <ExampleValue>SOGEFRPPXXX</ExampleValue>
+        <ValidationRules>
+          <Rule>Must be valid BIC format (8 or 11 characters)</Rule>
+          <Rule>BIC must exist in SWIFT BIC Directory</Rule>
+        </ValidationRules>
+      </Field>
+
+      <Field id="FIELD_06">
+        <FieldTag>:53A:</FieldTag>
+        <FieldName>Sender's Correspondent</FieldName>
+        <DataType>BIC</DataType>
+        <Format>[/Account]CRLF BIC</Format>
+        <Mandatory>false</Mandatory>
+        <Description>Financial institution through which the sender routes the payment</Description>
+        <ExampleValue>BNPAFRPPXXX</ExampleValue>
+        <ValidationRules>
+          <Rule>Must be valid BIC format if provided</Rule>
+        </ValidationRules>
+      </Field>
+
+      <Field id="FIELD_07">
+        <FieldTag>:54A:</FieldTag>
+        <FieldName>Receiver's Correspondent</FieldName>
+        <DataType>BIC</DataType>
+        <Format>[/Account]CRLF BIC</Format>
+        <Mandatory>false</Mandatory>
+        <Description>Financial institution through which the receiver receives the payment</Description>
+        <ExampleValue>DEUTDEFFXXX</ExampleValue>
+        <ValidationRules>
+          <Rule>Must be valid BIC format if provided</Rule>
+        </ValidationRules>
+      </Field>
+
+      <Field id="FIELD_08">
+        <FieldTag>:56A:</FieldTag>
+        <FieldName>Intermediary Institution</FieldName>
+        <DataType>BIC</DataType>
+        <Format>[/Account]CRLF BIC</Format>
+        <Mandatory>false</Mandatory>
+        <Description>Financial institution between the sender's and receiver's correspondents</Description>
+        <ExampleValue>CHASUS33XXX</ExampleValue>
+        <ValidationRules>
+          <Rule>Must be valid BIC format if provided</Rule>
+        </ValidationRules>
+      </Field>
+
+      <Field id="FIELD_09">
+        <FieldTag>:57A:</FieldTag>
+        <FieldName>Account With Institution</FieldName>
+        <DataType>BIC</DataType>
+        <Format>[/Account]CRLF BIC</Format>
+        <Mandatory>false</Mandatory>
+        <Description>Financial institution where the beneficiary maintains their account</Description>
+        <ExampleValue>DEUTDEFFXXX</ExampleValue>
+        <ValidationRules>
+          <Rule>Must be valid BIC format if provided</Rule>
+        </ValidationRules>
+      </Field>
+
+      <Field id="FIELD_10">
+        <FieldTag>:59:</FieldTag>
+        <FieldName>Beneficiary Customer</FieldName>
+        <DataType>TEXT</DataType>
+        <MaxLength>140</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Format>[/Account]CRLF4*35x</Format>
+        <Description>Account number and name/address of the beneficiary (payee)</Description>
+        <ExampleValue>/DE89370400440532013000 DEUTSCHE BANK AG FRANKFURT AM MAIN GERMANY</ExampleValue>
+        <ValidationRules>
+          <Rule>First line can optionally start with account number preceded by /</Rule>
+          <Rule>Maximum 4 lines of 35 characters each</Rule>
+        </ValidationRules>
+        <ComplianceNote>Critical for sanctions screening and beneficiary verification</ComplianceNote>
+      </Field>
+
+      <Field id="FIELD_11">
+        <FieldTag>:70:</FieldTag>
+        <FieldName>Remittance Information</FieldName>
+        <DataType>TEXT</DataType>
+        <MaxLength>140</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Format>4*35x</Format>
+        <Description>Details about the purpose of the payment</Description>
+        <ExampleValue>INVOICE 2026-0203-001 CONSULTING SERVICES JAN 2026</ExampleValue>
+        <ValidationRules>
+          <Rule>Maximum 4 lines of 35 characters each</Rule>
+          <Rule>Free text format</Rule>
+        </ValidationRules>
+      </Field>
+
+      <Field id="FIELD_12">
+        <FieldTag>:71A:</FieldTag>
+        <FieldName>Details of Charges</FieldName>
+        <DataType>CODE</DataType>
+        <MaxLength>3</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Format>3!a</Format>
+        <Description>Party responsible for transaction charges</Description>
+        <ExampleValue>SHA</ExampleValue>
+        <AllowedValues>
+          <Value code="OUR">All charges borne by ordering customer</Value>
+          <Value code="BEN">All charges borne by beneficiary customer</Value>
+          <Value code="SHA">Charges shared between sender and receiver bank</Value>
+        </AllowedValues>
+        <ValidationRules>
+          <Rule>Must be one of: OUR, BEN, SHA</Rule>
+        </ValidationRules>
+      </Field>
+
+      <Field id="FIELD_13">
+        <FieldTag>:72:</FieldTag>
+        <FieldName>Sender to Receiver Information</FieldName>
+        <DataType>TEXT</DataType>
+        <MaxLength>210</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Format>6*35x</Format>
+        <Description>Additional information for the receiver bank</Description>
+        <ExampleValue>/ACC/Additional account information /BNF/Beneficiary details</ExampleValue>
+        <ValidationRules>
+          <Rule>Maximum 6 lines of 35 characters each</Rule>
+          <Rule>May contain structured codes such as /ACC/ /BNF/</Rule>
+        </ValidationRules>
+      </Field>
+
+    </Fields>
+  </SourceMessage>
+
+  <!-- ============================================= -->
+  <!-- TARGET MESSAGE STRUCTURE (pacs.008) -->
+  <!-- ============================================= -->
+  <TargetMessage>
+    <MessageType>pacs.008.001.08</MessageType>
+    <MessageName>FIToFICustomerCreditTransfer</MessageName>
+    <Standard>ISO 20022</Standard>
+    <Schema>pacs.008.001.08.xsd</Schema>
+    <Namespace>urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08</Namespace>
+
+    <Fields>
+
+      <Field id="FIELD_01">
+        <XPath>/Document/FIToFICstmrCdtTrf/GrpHdr/MsgId</XPath>
+        <FieldName>Message Identification</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>35</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Format>Max35Text</Format>
+        <Description>Unique identification assigned by the instructing party to unambiguously identify the message</Description>
+        <ExampleValue>MSGID20260203001234567890</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_02">
+        <XPath>/Document/FIToFICstmrCdtTrf/GrpHdr/CreDtTm</XPath>
+        <FieldName>Creation Date Time</FieldName>
+        <DataType>DATETIME</DataType>
+        <Mandatory>true</Mandatory>
+        <Format>ISODateTime</Format>
+        <Description>Date and time at which the message was created</Description>
+        <ExampleValue>2026-02-03T14:30:00Z</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_03">
+        <XPath>/Document/FIToFICstmrCdtTrf/GrpHdr/NbOfTxs</XPath>
+        <FieldName>Number of Transactions</FieldName>
+        <DataType>INTEGER</DataType>
+        <Mandatory>true</Mandatory>
+        <Format>Max15NumericText</Format>
+        <Description>Number of individual transactions in the message. For MT103 to pacs.008 always 1.</Description>
+        <ExampleValue>1</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_04">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/Amt/InstdAmt</XPath>
+        <FieldName>Instructed Amount</FieldName>
+        <DataType>AMOUNT</DataType>
+        <Mandatory>true</Mandatory>
+        <Format>ActiveOrHistoricCurrencyAndAmount</Format>
+        <Description>Amount of money to be moved between debtor and creditor before deduction of charges</Description>
+        <ExampleValue Ccy="EUR">25000.00</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_05">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/Dbtr/Nm</XPath>
+        <FieldName>Debtor Name</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>140</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Format>Max140Text</Format>
+        <Description>Name by which the debtor is known</Description>
+        <ExampleValue>SOCIETE GENERALE</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_06">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/DbtrAcct/Id/IBAN</XPath>
+        <FieldName>Debtor Account Identification - IBAN</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>34</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Format>IBAN2007Identifier</Format>
+        <Description>International Bank Account Number identifying the debtor account</Description>
+        <ExampleValue>FR7630006000011234567890189</ExampleValue>
+        <ValidationRules>
+          <Rule>Must be valid IBAN format if provided</Rule>
+          <Rule>IBAN checksum must be valid</Rule>
+        </ValidationRules>
+      </Field>
+
+      <Field id="FIELD_07">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/DbtrAgt/FinInstnId/BICFI</XPath>
+        <FieldName>Debtor Agent - BIC</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>11</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Format>BICFIIdentifier</Format>
+        <Description>Bank Identifier Code of the debtor's financial institution</Description>
+        <ExampleValue>SOGEFRPPXXX</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_08">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/CdtrAgt/FinInstnId/BICFI</XPath>
+        <FieldName>Creditor Agent - BIC</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>11</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Format>BICFIIdentifier</Format>
+        <Description>Bank Identifier Code of the creditor's financial institution</Description>
+        <ExampleValue>DEUTDEFFXXX</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_09">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/Cdtr/Nm</XPath>
+        <FieldName>Creditor Name</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>140</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Format>Max140Text</Format>
+        <Description>Name by which the creditor is known. Party to which an amount of money is due.</Description>
+        <ExampleValue>DEUTSCHE BANK AG</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_10">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/CdtrAcct/Id/IBAN</XPath>
+        <FieldName>Creditor Account Identification - IBAN</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>34</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Format>IBAN2007Identifier</Format>
+        <Description>International Bank Account Number identifying the creditor account</Description>
+        <ExampleValue>DE89370400440532013000</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_11">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/RmtInf/Ustrd</XPath>
+        <FieldName>Remittance Information Unstructured</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>140</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Format>Max140Text</Format>
+        <Description>Unstructured remittance information provided by the debtor for reconciliation purposes</Description>
+        <ExampleValue>INVOICE 2026-0203-001 CONSULTING SERVICES JAN 2026</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_12">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/ChrgBr</XPath>
+        <FieldName>Charge Bearer</FieldName>
+        <DataType>CODE</DataType>
+        <MaxLength>4</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Format>ChargeBearerType1Code</Format>
+        <Description>Specifies which party bears the charges associated with the payment transaction</Description>
+        <ExampleValue>SHAR</ExampleValue>
+        <AllowedValues>
+          <Value code="DEBT">All charges borne by debtor</Value>
+          <Value code="CRED">All charges borne by creditor</Value>
+          <Value code="SHAR">Charges shared</Value>
+          <Value code="SLEV">Service level</Value>
+        </AllowedValues>
+      </Field>
+
+      <Field id="FIELD_13">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/Purp/Cd</XPath>
+        <FieldName>Purpose Code</FieldName>
+        <DataType>CODE</DataType>
+        <MaxLength>4</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Format>ExternalPurpose1Code</Format>
+        <Description>Underlying reason for the payment transaction. Not present in MT103 - must be derived or defaulted.</Description>
+        <ExampleValue>SALA</ExampleValue>
+        <AllowedValues>
+          <Value code="SALA">Salary Payment</Value>
+          <Value code="SUPP">Supplier Payment</Value>
+          <Value code="TRAD">Trade Settlement</Value>
+          <Value code="CASH">Cash Management Transfer</Value>
+          <Value code="GDDS">Goods</Value>
+          <Value code="LOAN">Loan Repayment</Value>
+          <Value code="RENT">Rent Payment</Value>
+          <Value code="OTHR">Other</Value>
+        </AllowedValues>
+      </Field>
+
+    </Fields>
+  </TargetMessage>
+
+  <!-- ============================================= -->
+  <!-- FIELD MAPPINGS -->
+  <!-- ============================================= -->
+  <FieldMappings>
+
+    <!-- ==================== MAPPING 01 ==================== -->
+    <Mapping id="MAPPING_01">
+      <SourceField ref="FIELD_01"/>
+      <TargetField ref="FIELD_01"/>
+
+      <MappingFormula>
+        <Type>DIRECT_COPY_WITH_ENHANCEMENT</Type>
+        <Expression>target.MsgId = source.field_20 + "_" + current_timestamp_compact()</Expression>
+        <PseudoCode>
+          mt103_reference = source.field_20
+          current_time = format_timestamp("YYYYMMDDHHmmss")
+          message_id = mt103_reference + "_" + current_time
+          if (length(message_id) > MAX_MSG_ID_LENGTH) then
+            message_id = substring(message_id, 1, MAX_MSG_ID_LENGTH)
+          endif
+          return message_id
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_20 != null AND source.field_20 != ""</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Missing mandatory field 20"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>LENGTH_VALIDATION</Type>
+          <Expression>length(source.field_20) &lt;= MAX_FIELD_20_LENGTH</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Field 20 exceeds maximum length of 16 characters"</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>FORMAT_VALIDATION</Type>
+          <Expression>matches(source.field_20, "^[A-Za-z0-9\-_]+$")</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Field 20 contains invalid characters"</ElseAction>
+        </Condition>
+        <Condition priority="4">
+          <Type>UNIQUENESS_CHECK</Type>
+          <Expression>NOT exists_in_processed_messages(formatted_msg_id, today)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Duplicate message ID detected"</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="MAX_MSG_ID_LENGTH"/>
+        <Variable ref="MAX_FIELD_20_LENGTH"/>
+        <Variable ref="DUPLICATE_DETECTION_WINDOW_DAYS"/>
+        <Variable ref="PROCESSING_TIMEZONE"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Message rejected - cannot process without unique identifier. Risk of duplicate payment if uniqueness not enforced.</ImpactIfFails>
+        <BusinessRationale>Ensures end-to-end traceability across MT103 and pacs.008 systems. Critical for payment tracking, reconciliation, and investigations.</BusinessRationale>
+        <PerformanceImpact>LOW (string concatenation + database duplicate check)</PerformanceImpact>
+        <AuditRequirement>All message IDs must be logged with originating MT103 reference and conversion timestamp for minimum AUDIT_RETENTION_YEARS years per SOX compliance.</AuditRequirement>
+        <ComplianceRequirement>Unique message identification required per SWIFT Standards and ISO 20022 business rules. Duplicate prevention required per PSD2 Article 80.</ComplianceRequirement>
+        <DataPrivacy>Message ID itself is not PII. No GDPR special handling required for this field.</DataPrivacy>
+        <MigrationNote>MT103 field 20 is 16 chars max, pacs.008 MsgId is 35 chars max. Timestamp suffix appended to prevent collisions in high-volume environments where same reference may be reused across days.</MigrationNote>
+        <CachingStrategy>Processed message IDs cached in Redis for DUPLICATE_DETECTION_WINDOW_DAYS days to enable fast duplicate detection without full database scan.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 02 ==================== -->
+    <Mapping id="MAPPING_02">
+      <SourceField ref="NONE"/>
+      <TargetField ref="FIELD_02"/>
+
+      <MappingFormula>
+        <Type>SYSTEM_GENERATED</Type>
+        <Expression>target.CreDtTm = current_datetime_iso8601()</Expression>
+        <PseudoCode>
+          current_time = system_current_time()
+          iso_formatted = format_datetime(current_time, "YYYY-MM-DDTHH:mm:ssZ")
+          return iso_formatted
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>ALWAYS_TRUE</Type>
+          <Expression>true</Expression>
+          <Action>GENERATE_TIMESTAMP</Action>
+          <ElseAction>N/A</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>TIMEZONE_VALIDATION</Type>
+          <Expression>is_utc_timezone(generated_timestamp)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>CONVERT_TO_UTC before setting field</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="PROCESSING_TIMEZONE"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>Message rejected by receiving system due to missing mandatory header field.</ImpactIfFails>
+        <BusinessRationale>ISO 20022 requires precise creation timestamp for message ordering, replay detection, and SLA measurement. MT103 has no equivalent field - SWIFT FIN network handles its own timestamps.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (system clock read only)</PerformanceImpact>
+        <AuditRequirement>Conversion timestamp logged alongside original MT103 reception time to measure processing latency per SLA monitoring.</AuditRequirement>
+        <ComplianceRequirement>ISO 20022 XML schema validation will reject message if CreDtTm is absent or malformed. UTC timezone required for cross-border consistency.</ComplianceRequirement>
+        <DataPrivacy>Timestamp is operational metadata. No PII. No GDPR restrictions.</DataPrivacy>
+        <MigrationNote>New mandatory field in ISO 20022 with no MT103 equivalent. Must be generated at conversion time. Always UTC (Z suffix) for consistency across time zones and DST changes.</MigrationNote>
+        <CachingStrategy>Not applicable - timestamp must always reflect actual conversion moment.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 03 ==================== -->
+    <Mapping id="MAPPING_03">
+      <SourceField ref="NONE"/>
+      <TargetField ref="FIELD_03"/>
+
+      <MappingFormula>
+        <Type>STATIC_VALUE</Type>
+        <Expression>target.NbOfTxs = "1"</Expression>
+        <PseudoCode>
+          number_of_transactions = "1"
+          return number_of_transactions
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>ALWAYS_TRUE</Type>
+          <Expression>true</Expression>
+          <Action>SET_TO_ONE</Action>
+          <ElseAction>N/A</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable name="MT103_TRANSACTION_COUNT" value="1" type="INTEGER" description="MT103 always carries exactly one transaction - static constant"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>ISO 20022 schema validation failure - NbOfTxs is mandatory in pacs.008 group header.</ImpactIfFails>
+        <BusinessRationale>MT103 represents a single customer credit transfer by definition. pacs.008 supports batches but MT103 migration always produces count of 1. Required for schema compliance and downstream batch reconciliation.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (static value assignment)</PerformanceImpact>
+        <AuditRequirement>No specific audit requirement for this field beyond standard message logging.</AuditRequirement>
+        <ComplianceRequirement>ISO 20022 pacs.008 schema requires NbOfTxs to equal the actual number of CdtTrfTxInf blocks. Always 1 for MT103 conversions.</ComplianceRequirement>
+        <DataPrivacy>Not applicable - count field contains no personal data.</DataPrivacy>
+        <MigrationNote>MT202 bulk (batch) to pacs.008 conversion would require dynamic count. For MT103 one-to-one conversion always hardcoded to 1.</MigrationNote>
+        <CachingStrategy>Not applicable - static value.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 04 ==================== -->
+    <Mapping id="MAPPING_04">
+      <SourceField ref="FIELD_03"/>
+      <TargetField ref="FIELD_04"/>
+
+      <MappingFormula>
+        <Type>EXTRACTION_AND_XML_FORMATTING</Type>
+        <Expression>
+          currency = extract_currency(source.field_32A, position 7-9)
+          amount = extract_amount(source.field_32A, position 10+)
+          amount_decimal = parse_decimal(amount)
+          target.InstdAmt = create_xml_amount(amount_decimal, currency)
+        </Expression>
+        <PseudoCode>
+          field_32a = source.field_32A
+          value_date = substring(field_32a, 1, 6)
+          currency_code = substring(field_32a, 7, 3)
+          amount_string = substring(field_32a, 10)
+          amount_normalized = replace(amount_string, ",", ".")
+          amount_decimal = parse_decimal(amount_normalized)
+          xml_amount = { value: amount_decimal, currency: currency_code }
+          return xml_amount
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_32A != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Missing mandatory field 32A"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>FORMAT_VALIDATION</Type>
+          <Expression>matches(source.field_32A, "^\d{6}[A-Z]{3}[\d,]+$")</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Invalid field 32A format - expected YYMMDDCCCNNNNN,NN"</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>CURRENCY_VALIDATION</Type>
+          <Expression>is_valid_iso4217_currency(extracted_currency)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Invalid or unsupported currency code"</ElseAction>
+        </Condition>
+        <Condition priority="4">
+          <Type>AMOUNT_RANGE_VALIDATION</Type>
+          <Expression>extracted_amount > 0 AND extracted_amount &lt;= MAX_AMOUNT</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Amount out of valid range (must be > 0 and &lt;= MAX_AMOUNT)"</ElseAction>
+        </Condition>
+        <Condition priority="5">
+          <Type>DECIMAL_PRECISION_CHECK</Type>
+          <Expression>decimal_places(extracted_amount) &lt;= MAX_DECIMAL_PLACES</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>ROUND to MAX_DECIMAL_PLACES decimal places AND LOG warning</ElseAction>
+        </Condition>
+        <Condition priority="6">
+          <Type>LARGE_AMOUNT_FLAG</Type>
+          <Expression>extracted_amount &lt; LARGE_AMOUNT_THRESHOLD</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>FLAG for AML compliance review AND PROCEED</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="MAX_AMOUNT"/>
+        <Variable ref="MAX_DECIMAL_PLACES"/>
+        <Variable ref="LARGE_AMOUNT_THRESHOLD"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Payment cannot be executed. Wrong amount credited to beneficiary causes financial loss and potential legal liability.</ImpactIfFails>
+        <BusinessRationale>Core financial value of the transaction. Any parsing or rounding error directly impacts the amount credited or debited. Basis for all downstream calculations including fees, FX, and GL posting.</BusinessRationale>
+        <PerformanceImpact>LOW (string parsing and decimal conversion - no external service call)</PerformanceImpact>
+        <AuditRequirement>All amount conversions must be logged with original MT103 value (comma decimal) and converted value (dot decimal) per SOX financial controls. Amounts above LARGE_AMOUNT_THRESHOLD must generate AML alert log entry.</AuditRequirement>
+        <ComplianceRequirement>Amounts above LARGE_AMOUNT_THRESHOLD (10 000 EUR) must be flagged per EU 4th AML Directive Article 11. Currency must be on approved list per sanctions regulations.</ComplianceRequirement>
+        <DataPrivacy>Transaction amount is not PII under GDPR. However combined with account data it becomes sensitive - access restricted to authorized payment processing roles.</DataPrivacy>
+        <MigrationNote>CRITICAL FORMAT DIFFERENCE: SWIFT uses comma as decimal separator (25000,00). ISO 20022 uses dot as decimal separator (25000.00). This conversion is mandatory and must never be skipped. Amount precision is always 2 decimal places for major currencies.</MigrationNote>
+        <CachingStrategy>No caching - amount must always be read directly from source message.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 05 ==================== -->
+    <Mapping id="MAPPING_05">
+      <SourceField ref="FIELD_04"/>
+      <TargetField ref="FIELD_05"/>
+
+      <MappingFormula>
+        <Type>TEXT_EXTRACTION_AND_NORMALIZATION</Type>
+        <Expression>
+          lines = split_lines(source.field_50K)
+          IF starts_with(lines[0], '/') THEN
+            name_lines = lines[1:]
+          ELSE
+            name_lines = lines
+          ENDIF
+          debtor_name = trim(name_lines[0])
+          target.Dbtr_Nm = debtor_name
+        </Expression>
+        <PseudoCode>
+          field_50k_content = source.field_50K
+          lines = split_by_newline(field_50k_content)
+          if (starts_with(lines[0], "/")) then
+            name_address_lines = lines[1:]
+          else
+            name_address_lines = lines
+          endif
+          debtor_name = name_address_lines[0]
+          debtor_name = trim(debtor_name)
+          if (length(debtor_name) > 140) then
+            debtor_name = substring(debtor_name, 1, 140)
+          endif
+          return debtor_name
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_50K != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Missing mandatory field 50K - ordering customer required"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>CONTENT_VALIDATION</Type>
+          <Expression>extracted_name != null AND length(extracted_name) > 0</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Cannot extract debtor name from field 50K"</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>LENGTH_VALIDATION</Type>
+          <Expression>length(extracted_name) &lt;= 140</Expression>
+          <Action>PROCEED normally</Action>
+          <ElseAction>TRUNCATE to 140 characters AND LOG warning with original value</ElseAction>
+        </Condition>
+        <Condition priority="4">
+          <Type>SANCTIONS_SCREENING</Type>
+          <Expression>NOT is_sanctioned_party(extracted_name)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>BLOCK message AND ALERT compliance team immediately</ElseAction>
+        </Condition>
+        <Condition priority="5">
+          <Type>PEP_SCREENING</Type>
+          <Expression>NOT is_politically_exposed_person(extracted_name)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>FLAG for enhanced due diligence review AND PROCEED with hold</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="SANCTIONS_SCREENING_ENABLED"/>
+        <Variable ref="PEP_SCREENING_ENABLED"/>
+        <Variable ref="AUDIT_RETENTION_YEARS"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Payment rejected. Serious compliance violation if sanctioned entity not detected. Potential regulatory fine and reputational damage.</ImpactIfFails>
+        <BusinessRationale>Identity of the payer is mandatory for AML/KYC compliance, sanctions screening against OFAC/EU/UN lists, PEP screening, transaction monitoring, and fraud detection. Required by FATF Travel Rule to accompany all wire transfers.</BusinessRationale>
+        <PerformanceImpact>MEDIUM - text parsing is fast but sanctions screening API call adds 50-200ms latency. Batch screening available for non-real-time flows.</PerformanceImpact>
+        <AuditRequirement>Sanctions and PEP screening results must be logged with timestamp, list version used, and decision for AUDIT_RETENTION_YEARS years. Required by EU 4th AML Directive Article 40.</AuditRequirement>
+        <ComplianceRequirement>Mandatory real-time sanctions screening per OFAC SDN List, EU Consolidated List (Regulation 2580/2001), UN Security Council Consolidated List. PEP screening per 4th and 5th EU AML Directives.</ComplianceRequirement>
+        <DataPrivacy>Debtor name is PII under GDPR Article 4. Must be encrypted at rest (AES-256) and in transit (TLS 1.3). Access logged for audit. Retention subject to GDPR right to erasure with exemption for AML compliance records per GDPR Article 17(3)(b).</DataPrivacy>
+        <MigrationNote>MT103 field 50K combines account + name + address in free text format (4 lines of 35 chars). ISO 20022 separates these into distinct structured elements (Nm, PstlAdr). Parser must intelligently identify where name ends and address begins.</MigrationNote>
+        <CachingStrategy>Sanctions list cached locally and refreshed every 4 hours. Individual name screening results NOT cached to prevent false negatives from stale data.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 06 ==================== -->
+    <Mapping id="MAPPING_06">
+      <SourceField ref="FIELD_04"/>
+      <TargetField ref="FIELD_06"/>
+
+      <MappingFormula>
+        <Type>CONDITIONAL_EXTRACTION_WITH_VALIDATION</Type>
+        <Expression>
+          lines = split_lines(source.field_50K)
+          IF starts_with(lines[0], '/') THEN
+            account_line = substring(lines[0], 2)
+            IF is_iban_format(account_line) THEN
+              target.DbtrAcct_Id_IBAN = account_line
+            ELSE
+              target.DbtrAcct_Id_Othr = account_line
+            ENDIF
+          ENDIF
+        </Expression>
+        <PseudoCode>
+          field_50k_content = source.field_50K
+          lines = split_by_newline(field_50k_content)
+          first_line = lines[0]
+          if (starts_with(first_line, "/")) then
+            account_number = substring(first_line, 2)
+            if (matches_iban_pattern(account_number) AND is_valid_iban_checksum(account_number)) then
+              debtor_iban = account_number
+            else
+              debtor_account_other = account_number
+              debtor_iban = null
+            endif
+          else
+            debtor_iban = null
+          endif
+          return debtor_iban
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>FORMAT_DETECTION</Type>
+          <Expression>starts_with(first_line, "/")</Expression>
+          <Action>EXTRACT_ACCOUNT and continue</Action>
+          <ElseAction>SET_TO_NULL - account number not provided in field 50K</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>IBAN_PATTERN_CHECK</Type>
+          <Expression>matches(account, "^[A-Z]{2}\d{2}[A-Z0-9]+$")</Expression>
+          <Action>VALIDATE_AS_IBAN</Action>
+          <ElseAction>STORE_IN_OTHER_IDENTIFIER element instead of IBAN element</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>IBAN_CHECKSUM_VALIDATION</Type>
+          <Expression>iban_checksum_valid(account)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Invalid IBAN checksum for debtor account"</ElseAction>
+        </Condition>
+        <Condition priority="4">
+          <Type>COUNTRY_VALIDATION</Type>
+          <Expression>iban_country_code_is_known(account)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>LOG_WARNING "Unknown IBAN country code" AND PROCEED</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable name="SEPA_REQUIRES_IBAN" value="true" type="BOOLEAN" description="SEPA zone payments require IBAN for debtor account"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>Payment may still succeed but reconciliation becomes difficult. Regulatory reporting incomplete. SEPA payments require IBAN - rejection risk for EUR payments.</ImpactIfFails>
+        <BusinessRationale>Account identification for debit reconciliation. Essential for automated straight-through processing (STP), regulatory reporting, and SEPA compliance where IBAN is mandatory.</BusinessRationale>
+        <PerformanceImpact>LOW (regex pattern match + modulo 97 checksum calculation - fully in-memory)</PerformanceImpact>
+        <AuditRequirement>Account numbers stored encrypted. Access to account data logged. Retention per AUDIT_RETENTION_YEARS years regulatory requirement.</AuditRequirement>
+        <ComplianceRequirement>SEPA Regulation 260/2012 mandates IBAN for EUR payments within SEPA zone. Non-SEPA payments may use proprietary account format stored in OthrId element.</ComplianceRequirement>
+        <DataPrivacy>Account number is PII and financial data under GDPR. Must be pseudonymized in logs and analytics. Full account number only accessible to authorized payment processing systems.</DataPrivacy>
+        <MigrationNote>MT103 field 50K optionally contains account on first line with slash prefix. ISO 20022 provides separate structured elements for IBAN and other account identifiers. Checksum validation mandatory before storing.</MigrationNote>
+        <CachingStrategy>No caching - account number extracted directly from message each time.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 07 ==================== -->
+    <Mapping id="MAPPING_07">
+      <SourceField ref="FIELD_05"/>
+      <TargetField ref="FIELD_07"/>
+
+      <MappingFormula>
+        <Type>DIRECT_COPY_WITH_FALLBACK</Type>
+        <Expression>
+          IF source.field_52A != null THEN
+            target.DbtrAgt_FinInstnId_BICFI = extract_bic(source.field_52A)
+          ELSE
+            target.DbtrAgt_FinInstnId_BICFI = get_sender_bic_from_header()
+          ENDIF
+        </Expression>
+        <PseudoCode>
+          if (source.field_52A is not null) then
+            field_52a = source.field_52A
+            lines = split_by_newline(field_52a)
+            if (starts_with(lines[0], "/")) then
+              bic_code = lines[1]
+            else
+              bic_code = lines[0]
+            endif
+            if (is_valid_bic(bic_code)) then
+              debtor_agent_bic = bic_code
+            else
+              throw error "Invalid BIC format in field 52A"
+            endif
+          else
+            debtor_agent_bic = message_header.sender_bic
+          endif
+          return debtor_agent_bic
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>DATA_AVAILABILITY</Type>
+          <Expression>source.field_52A != null OR header.sender_bic != null</Expression>
+          <Action>PROCEED with available source</Action>
+          <ElseAction>REJECT with error "Cannot determine debtor agent - field 52A absent and no sender BIC in header"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>BIC_FORMAT_VALIDATION</Type>
+          <Expression>matches(bic, "^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$")</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Invalid BIC format - must be 8 or 11 alphanumeric characters"</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>BIC_DIRECTORY_CHECK</Type>
+          <Expression>bic_exists_in_swift_directory(bic)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>LOG_WARNING "BIC not found in SWIFT directory" AND PROCEED - may be valid non-SWIFT institution</ElseAction>
+        </Condition>
+        <Condition priority="4">
+          <Type>SANCTIONS_CHECK</Type>
+          <Expression>NOT is_sanctioned_institution(bic)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>BLOCK message AND ALERT compliance team</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="BIC_CACHE_TTL_HOURS"/>
+        <Variable ref="SANCTIONS_SCREENING_ENABLED"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>Payment routing failure - cannot identify institution responsible for debiting ordering customer. Correspondent banking chain broken.</ImpactIfFails>
+        <BusinessRationale>Identifies the financial institution that will debit the ordering customer account. Essential for interbank settlement routing, correspondent banking chain, and compliance traceability.</BusinessRationale>
+        <PerformanceImpact>LOW - BIC validation is in-memory. Directory lookup served from cache (BIC_CACHE_TTL_HOURS hour TTL). Sanctions check adds 10-50ms.</PerformanceImpact>
+        <AuditRequirement>BIC of debtor agent must be stored with transaction for FATF Travel Rule compliance. Required for correspondent banking audit trail.</AuditRequirement>
+        <ComplianceRequirement>Institution-level sanctions screening required per OFAC and EU regulations. BIC must not belong to sanctioned correspondent bank.</ComplianceRequirement>
+        <DataPrivacy>BIC codes are public identifiers - not PII under GDPR. No special data protection measures required.</DataPrivacy>
+        <MigrationNote>MT103 field 52A is optional. Best practice fallback is to use sender BIC from SWIFT message application header (block 1) as debtor agent when field absent.</MigrationNote>
+        <CachingStrategy>SWIFT BIC directory cached in memory and refreshed every BIC_CACHE_TTL_HOURS hours. Reduces latency from ~50ms (API call) to under 1ms (memory lookup).</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 08 ==================== -->
+    <Mapping id="MAPPING_08">
+      <SourceField ref="FIELD_09"/>
+      <TargetField ref="FIELD_08"/>
+
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>target.CdtrAgt_FinInstnId_BICFI = extract_bic(source.field_57A)</Expression>
+        <PseudoCode>
+          field_57a = source.field_57A
+          if (field_57a is not null) then
+            lines = split_by_newline(field_57a)
+            if (starts_with(lines[0], "/")) then
+              bic_code = lines[1]
+            else
+              bic_code = lines[0]
+            endif
+            creditor_agent_bic = validate_and_clean_bic(bic_code)
+          else
+            creditor_agent_bic = null
+          endif
+          return creditor_agent_bic
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_57A != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Missing mandatory field 57A - creditor agent required for routing"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>BIC_FORMAT_VALIDATION</Type>
+          <Expression>is_valid_bic_format(extracted_bic)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Invalid BIC format in field 57A"</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>REACHABILITY_CHECK</Type>
+          <Expression>is_reachable_via_swift(extracted_bic)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Beneficiary bank BIC not reachable via SWIFT network"</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="BIC_CACHE_TTL_HOURS"/>
+        <Variable ref="SANCTIONS_SCREENING_ENABLED"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Payment cannot be delivered to beneficiary. Funds stuck in transit. Customer complaint and potential SLA breach.</ImpactIfFails>
+        <BusinessRationale>Identifies the financial institution that will credit the beneficiary account. Absolutely critical for payment routing and delivery. Without this, payment has no destination.</BusinessRationale>
+        <PerformanceImpact>LOW - BIC validation and reachability check served from BIC_CACHE_TTL_HOURS hour cache.</PerformanceImpact>
+        <AuditRequirement>Creditor agent BIC stored for end-to-end payment traceability and correspondent banking reconciliation.</AuditRequirement>
+        <ComplianceRequirement>Reachability verification prevents payments to non-SWIFT institutions. Sanctions check against beneficiary bank required per OFAC and EU regulations.</ComplianceRequirement>
+        <DataPrivacy>BIC is public identifier. No GDPR restrictions.</DataPrivacy>
+        <MigrationNote>MT103 field 57A maps directly to CdtrAgt in pacs.008. Field is mandatory in practice even though technically optional in schema - most receiving banks reject without it.</MigrationNote>
+        <CachingStrategy>BIC reachability data cached with BIC_CACHE_TTL_HOURS hour TTL. SWIFT connectivity status refreshed from SWIFT Alliance Gateway every hour.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 09 ==================== -->
+    <Mapping id="MAPPING_09">
+      <SourceField ref="FIELD_10"/>
+      <TargetField ref="FIELD_09"/>
+
+      <MappingFormula>
+        <Type>TEXT_EXTRACTION_AND_NORMALIZATION</Type>
+        <Expression>
+          lines = split_lines(source.field_59)
+          IF starts_with(lines[0], '/') THEN
+            name_lines = lines[1:]
+          ELSE
+            name_lines = lines
+          ENDIF
+          creditor_name = trim(name_lines[0])
+          target.Cdtr_Nm = creditor_name
+        </Expression>
+        <PseudoCode>
+          field_59_content = source.field_59
+          lines = split_by_newline(field_59_content)
+          if (starts_with(lines[0], "/")) then
+            name_address_lines = lines[1:]
+          else
+            name_address_lines = lines
+          endif
+          creditor_name = name_address_lines[0]
+          creditor_name = trim_and_normalize(creditor_name)
+          if (length(creditor_name) > 140) then
+            creditor_name = substring(creditor_name, 1, 140)
+          endif
+          return creditor_name
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_59 != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Missing mandatory field 59 - beneficiary customer required"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>SANCTIONS_SCREENING</Type>
+          <Expression>NOT is_sanctioned_party(extracted_name)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>BLOCK message AND ALERT compliance team immediately</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>NAME_MATCHING</Type>
+          <Expression>beneficiary_name_matches_account_holder(name, account)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>FLAG for manual review - potential fraud or mule account</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="SANCTIONS_SCREENING_ENABLED"/>
+        <Variable ref="PEP_SCREENING_ENABLED"/>
+        <Variable ref="AUDIT_RETENTION_YEARS"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Payment blocked. Compliance violation if sanctioned beneficiary not detected. Financial crime facilitation risk.</ImpactIfFails>
+        <BusinessRationale>Identity of the payee is critical for sanctions screening, fraud detection (name/account mismatch), payment reconciliation, and FATF Travel Rule compliance. Must be stored with every transaction.</BusinessRationale>
+        <PerformanceImpact>MEDIUM - text extraction fast but sanctions API adds 50-200ms. Name matching algorithm adds 10-30ms.</PerformanceImpact>
+        <AuditRequirement>Beneficiary name and sanctions screening result logged for AUDIT_RETENTION_YEARS years. Mandatory per EU 4th AML Directive and FATF Travel Rule Recommendation 16.</AuditRequirement>
+        <ComplianceRequirement>Real-time sanctions screening of beneficiary against OFAC SDN, EU Consolidated List, UN Security Council List. Name-matching for fraud prevention per PSD2 Article 89.</ComplianceRequirement>
+        <DataPrivacy>Creditor name is PII under GDPR. Same protections as debtor name: encrypted storage, access logging, retention exemption for AML records per GDPR Article 17(3)(b).</DataPrivacy>
+        <MigrationNote>Same extraction logic as debtor name from field 50K but applied to field 59. Both fields share identical format: optional /account on first line followed by name and address lines.</MigrationNote>
+        <CachingStrategy>Sanctions list cached, refreshed every 4 hours. Name-matching results not cached due to sensitivity.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 10 ==================== -->
+    <Mapping id="MAPPING_10">
+      <SourceField ref="FIELD_10"/>
+      <TargetField ref="FIELD_10"/>
+
+      <MappingFormula>
+        <Type>CONDITIONAL_EXTRACTION_WITH_VALIDATION</Type>
+        <Expression>
+          lines = split_lines(source.field_59)
+          IF starts_with(lines[0], '/') THEN
+            account_line = substring(lines[0], 2)
+            IF is_iban_format(account_line) THEN
+              target.CdtrAcct_Id_IBAN = account_line
+            ELSE
+              target.CdtrAcct_Id_Othr = account_line
+            ENDIF
+          ENDIF
+        </Expression>
+        <PseudoCode>
+          field_59_content = source.field_59
+          lines = split_by_newline(field_59_content)
+          first_line = lines[0]
+          if (starts_with(first_line, "/")) then
+            account_number = substring(first_line, 2)
+            if (matches_iban_pattern(account_number) AND is_valid_iban_checksum(account_number)) then
+              creditor_iban = account_number
+            else
+              creditor_account_other = account_number
+              creditor_iban = null
+            endif
+          else
+            creditor_iban = null
+          endif
+          return creditor_iban
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>IBAN_VALIDATION</Type>
+          <Expression>is_valid_iban(account) OR account is null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Invalid IBAN checksum for creditor account"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>ACCOUNT_STATUS_CHECK</Type>
+          <Expression>is_active_account(account, creditor_agent_bic)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Inactive or closed beneficiary account"</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable name="SEPA_REQUIRES_CREDITOR_IBAN" value="true" type="BOOLEAN" description="SEPA credit transfers require creditor IBAN"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Payment credited to wrong account or rejected by receiving bank. Financial loss and customer dispute.</ImpactIfFails>
+        <BusinessRationale>Destination account for funds crediting. Any error results in misposted payment, which requires manual reversal and customer remediation. Accounts payable reconciliation depends on correct account identification.</BusinessRationale>
+        <PerformanceImpact>MEDIUM - IBAN checksum calculated locally but account status check requires API call to receiving bank or internal account database (~100ms).</PerformanceImpact>
+        <AuditRequirement>Creditor account number stored encrypted with transaction for 7 years. Required for payment investigation and regulatory reporting.</AuditRequirement>
+        <ComplianceRequirement>SEPA Regulation 260/2012: IBAN mandatory for EUR payments in SEPA zone. Account status verification required to prevent payments to closed accounts per bank operating procedures.</ComplianceRequirement>
+        <DataPrivacy>Account number is highly sensitive financial PII. Pseudonymized in logs. Full account number access restricted to payment processing and reconciliation systems only.</DataPrivacy>
+        <MigrationNote>Identical extraction logic to debtor account (MAPPING_06) but applied to field 59. In SEPA zone, creditor IBAN is mandatory - rejection rate for missing IBAN very high with SEPA CSMs.</MigrationNote>
+        <CachingStrategy>Account validation results not cached - account status must be checked in real-time to prevent posting to recently closed accounts.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 11 ==================== -->
+    <Mapping id="MAPPING_11">
+      <SourceField ref="FIELD_11"/>
+      <TargetField ref="FIELD_11"/>
+
+      <MappingFormula>
+        <Type>TEXT_CONCATENATION_WITH_NORMALIZATION</Type>
+        <Expression>
+          lines = split_lines(source.field_70)
+          remittance_text = join(lines, " ")
+          remittance_normalized = normalize_whitespace(remittance_text)
+          IF length(remittance_normalized) > REMITTANCE_MAX_LENGTH THEN
+            target.RmtInf_Ustrd = substring(remittance_normalized, 1, REMITTANCE_MAX_LENGTH)
+          ELSE
+            target.RmtInf_Ustrd = remittance_normalized
+          ENDIF
+        </Expression>
+        <PseudoCode>
+          field_70_content = source.field_70
+          if (field_70_content is not null) then
+            lines = split_by_newline(field_70_content)
+            remittance_text = join(lines, " ")
+            remittance_text = replace_multiple_spaces_with_single(remittance_text)
+            remittance_text = trim(remittance_text)
+            if (length(remittance_text) > REMITTANCE_MAX_LENGTH) then
+              remittance_text = substring(remittance_text, 1, REMITTANCE_MAX_LENGTH)
+              log_warning("Remittance information truncated")
+            endif
+          else
+            remittance_text = null
+          endif
+          return remittance_text
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>OPTIONAL_FIELD</Type>
+          <Expression>true</Expression>
+          <Action>PROCESS if present, skip if null</Action>
+          <ElseAction>N/A - field is optional</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>LENGTH_CHECK</Type>
+          <Expression>length(remittance) &lt;= REMITTANCE_MAX_LENGTH</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>TRUNCATE to REMITTANCE_MAX_LENGTH characters AND LOG warning with original length</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>CONTENT_SCREENING</Type>
+          <Expression>NOT contains_suspicious_keywords(remittance)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>FLAG for AML compliance review AND PROCEED</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="REMITTANCE_MAX_LENGTH"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Loss of payment purpose information. Customer reconciliation failure. Invoice matching impossible for accounts payable automation.</ImpactIfFails>
+        <BusinessRationale>Provides context for payment purpose critical for invoice matching, accounts payable automation, and regulatory reporting. Also screened for AML suspicious keywords (weapon, narco, etc.).</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (string manipulation only - no external calls)</PerformanceImpact>
+        <AuditRequirement>Remittance text logged with transaction for reconciliation audit trail. AML keyword flags logged separately with compliance alert.</AuditRequirement>
+        <ComplianceRequirement>Remittance information screened for AML suspicious patterns per bank AML policy. Some jurisdictions require structured remittance (ISO 11649 creditor reference) for regulatory reporting.</ComplianceRequirement>
+        <DataPrivacy>Remittance text may contain personal references (invoice to John Doe, etc.) making it potentially PII. Treat with same protections as name fields.</DataPrivacy>
+        <MigrationNote>MT103 field 70 is unstructured free text (4 lines x 35 chars = 140 chars total). ISO 20022 offers both Ustrd (unstructured, like MT103) and Strd (structured, machine-readable invoice references). MT103 migration uses Ustrd. Advanced implementations may parse and structure the content into ISO 11649 format.</MigrationNote>
+        <CachingStrategy>No caching required - pure text transformation.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 12 ==================== -->
+    <Mapping id="MAPPING_12">
+      <SourceField ref="FIELD_12"/>
+      <TargetField ref="FIELD_12"/>
+
+      <MappingFormula>
+        <Type>CODE_TRANSLATION</Type>
+        <Expression>
+          SWITCH source.field_71A:
+            CASE "OUR": target.ChrgBr = "DEBT"
+            CASE "BEN": target.ChrgBr = "CRED"
+            CASE "SHA": target.ChrgBr = "SHAR"
+            DEFAULT:    target.ChrgBr = DEFAULT_CHARGE_BEARER
+          END_SWITCH
+        </Expression>
+        <PseudoCode>
+          mt103_code = source.field_71A
+          charge_code_map = { "OUR": "DEBT", "BEN": "CRED", "SHA": "SHAR" }
+          if (charge_code_map.contains(mt103_code)) then
+            iso20022_code = charge_code_map[mt103_code]
+          else
+            iso20022_code = DEFAULT_CHARGE_BEARER
+            log_warning("Unknown charge code " + mt103_code + ", defaulting to " + DEFAULT_CHARGE_BEARER)
+          endif
+          if (transaction_currency == SEPA_CURRENCY AND iso20022_code != "SHAR") then
+            log_warning("EUR SEPA payment overridden to SHAR per EU Regulation 924/2009")
+            iso20022_code = "SHAR"
+          endif
+          return iso20022_code
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_71A != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>SET_TO_DEFAULT (DEFAULT_CHARGE_BEARER = SHAR) AND LOG warning</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>CODE_VALIDATION</Type>
+          <Expression>mt103_code IN ["OUR", "BEN", "SHA"]</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>LOG_WARNING and USE_DEFAULT (DEFAULT_CHARGE_BEARER)</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>REGULATORY_OVERRIDE</Type>
+          <Expression>NOT (currency == SEPA_CURRENCY AND iso20022_code != "SHAR")</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>OVERRIDE to SHAR - EU Regulation 924/2009 mandates SHA for EUR SEPA payments</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="DEFAULT_CHARGE_BEARER"/>
+        <Variable ref="SEPA_CURRENCY"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>Incorrect charge allocation causes financial dispute between sender and receiver banks. Revenue impact on fee collection.</ImpactIfFails>
+        <BusinessRationale>Determines who pays bank processing charges. Affects net amount received by beneficiary and bank fee revenue. EU Regulation 924/2009 mandates SHA for EUR payments within SEPA - automatic override applied.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (simple map lookup and one conditional check)</PerformanceImpact>
+        <AuditRequirement>Charge bearer code logged with transaction. Any regulatory override logged with original value and override reason.</AuditRequirement>
+        <ComplianceRequirement>EU Regulation 924/2009 Article 9 prohibits BEN charge bearer for EUR payments in SEPA zone. Override to SHA must be applied automatically. Some countries (e.g. Australia) have additional charge bearer restrictions for consumer protection.</ComplianceRequirement>
+        <DataPrivacy>Charge bearer code is operational data. No PII. No GDPR restrictions.</DataPrivacy>
+        <MigrationNote>Clean 1:1 code translation table. MT103 OUR maps to ISO 20022 DEBT (both mean sender pays all). BEN maps to CRED (receiver pays all). SHA maps to SHAR (shared). ISO 20022 adds SLEV (follow service level agreement) which has no MT103 equivalent.</MigrationNote>
+        <CachingStrategy>No caching - static lookup table loaded at startup.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 13 ==================== -->
+    <Mapping id="MAPPING_13">
+      <SourceField ref="FIELD_02"/>
+      <TargetField ref="FIELD_13"/>
+
+      <MappingFormula>
+        <Type>DERIVATION_WITH_FALLBACK</Type>
+        <Expression>
+          IF source.field_23B == "SPAY" THEN
+            target.Purp_Cd = "SALA"
+          ELSE IF source.field_23B == "CRED" THEN
+            IF contains(source.field_70, "INVOICE") THEN
+              target.Purp_Cd = "SUPP"
+            ELSE IF contains(source.field_70, "SALARY") THEN
+              target.Purp_Cd = "SALA"
+            ELSE
+              target.Purp_Cd = "GDDS"
+            ENDIF
+          ELSE IF source.field_23B == "CRTS" THEN
+            target.Purp_Cd = "TRAD"
+          ELSE
+            target.Purp_Cd = "OTHR"
+          ENDIF
+        </Expression>
+        <PseudoCode>
+          bank_op_code = source.field_23B
+          remittance = to_lowercase(source.field_70)
+          if (bank_op_code == "SPAY") then
+            purpose_code = "SALA"
+          else if (bank_op_code == "CRED") then
+            if (contains(remittance, "invoice") OR contains(remittance, "inv")) then
+              purpose_code = "SUPP"
+            else if (contains(remittance, "salary") OR contains(remittance, "payroll")) then
+              purpose_code = "SALA"
+            else if (contains(remittance, "loan") OR contains(remittance, "credit")) then
+              purpose_code = "LOAN"
+            else if (contains(remittance, "rent")) then
+              purpose_code = "RENT"
+            else
+              purpose_code = "GDDS"
+            endif
+          else if (bank_op_code == "CRTS") then
+            purpose_code = "TRAD"
+          else
+            purpose_code = "OTHR"
+          endif
+          return purpose_code
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>CODE_DERIVATION</Type>
+          <Expression>bank_operation_code != null</Expression>
+          <Action>ATTEMPT_DERIVATION from field 23B and field 70</Action>
+          <ElseAction>USE_DEFAULT ("OTHR") AND LOG for manual review</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>CONFIDENCE_THRESHOLD</Type>
+          <Expression>derivation_confidence >= PURPOSE_CODE_DERIVATION_MIN_CONFIDENCE</Expression>
+          <Action>USE_DERIVED_CODE</Action>
+          <ElseAction>USE_GENERIC_CODE ("OTHR") AND LOG for potential manual classification</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>REGULATORY_REQUIREMENT</Type>
+          <Expression>purpose_code_required_for_destination_country(creditor_country)</Expression>
+          <Action>ENSURE_PURPOSE_SET with derived or default value</Action>
+          <ElseAction>OPTIONAL - field may be left empty for non-requiring destinations</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="PURPOSE_CODE_DERIVATION_MIN_CONFIDENCE"/>
+        <Variable name="PURPOSE_CODE_REQUIRED_COUNTRIES" value="CN,IN,RU,BR" type="STRING" description="Comma-separated ISO country codes where purpose code is mandatory for cross-border payments"/>
+        <Variable name="KEYWORD_MAP_VERSION" value="2026.1" type="STRING" description="Version of the keyword-to-purpose-code mapping table in use"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Payments to countries requiring purpose code (China, India, Russia, Brazil) may be rejected by receiving bank. Statistical reporting to central bank incomplete.</ImpactIfFails>
+        <BusinessRationale>Purpose codes enable central bank statistical reporting, regulatory compliance for capital controls, automated routing rules in treasury systems, and tax reporting. Mandatory in several jurisdictions.</BusinessRationale>
+        <PerformanceImpact>LOW (keyword search in remittance field - in-memory string operations only)</PerformanceImpact>
+        <AuditRequirement>Derived purpose code logged with confidence score and derivation method for quality monitoring. Allows retroactive correction if keyword model updated.</AuditRequirement>
+        <ComplianceRequirement>China PBOC requires purpose code for all inbound cross-border payments. India RBI requires for certain transaction types. Brazil Bacen requires for regulatory reporting. EU/US optional but strongly recommended for STP.</ComplianceRequirement>
+        <DataPrivacy>Purpose code itself is not PII. Derived from remittance which may contain PII references - derivation process does not store remittance content separately.</DataPrivacy>
+        <MigrationNote>MAJOR CHALLENGE: Purpose code does not exist in MT103. Must be derived entirely from field 23B (4 values) and keyword analysis of field 70 (free text). Derivation accuracy typically 60-80%. Banks with higher accuracy requirements use ML model trained on historical transaction data. Manual override workflow recommended for high-value transactions to PURPOSE_CODE_REQUIRED_COUNTRIES.</MigrationNote>
+        <CachingStrategy>Keyword lookup table (KEYWORD_MAP_VERSION) loaded at startup and cached in memory. No per-transaction caching needed.</CachingStrategy>
+      </General>
+    </Mapping>
+
+  </FieldMappings>
+
+</MessageMapping>

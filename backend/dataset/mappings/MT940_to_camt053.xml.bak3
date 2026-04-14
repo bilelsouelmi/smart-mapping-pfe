@@ -1,0 +1,1631 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MessageMapping xmlns="http://vermeg.com/banking/mapping" version="1.0">
+  
+  <!-- ============================================= -->
+  <!-- GENERAL INFORMATION -->
+  <!-- ============================================= -->
+  <GeneralInformation>
+    <MappingId>MAP_MT940_CAMT053_001</MappingId>
+    <MappingName>MT940 to camt.053 Conversion</MappingName>
+    <Version>2.0.0</Version>
+    <CreatedDate>2026-02-03</CreatedDate>
+    <CreatedBy>Bilel SOUELMI - Vermeg FinTech Team</CreatedBy>
+    <LastModifiedDate>2026-02-03</LastModifiedDate>
+    <Status>ACTIVE</Status>
+    
+    <BusinessContext>
+      <Description>
+        Converts SWIFT MT940 (Customer Statement Message) to ISO 20022 camt.053.001.08 
+        (BankToCustomerStatement). This is one of the most critical conversions in the 
+        SWIFT ISO 20022 migration as MT940 is THE most widely used SWIFT message globally 
+        for account statements and reconciliation.
+        
+        MT940 provides daily account statements with opening/closing balances and all debit/
+        credit movements. Banks send MT940 to corporate customers for cash management, 
+        reconciliation, and treasury operations. The conversion to camt.053 is essential 
+        for modernizing cash management systems while maintaining compatibility with legacy 
+        corporate treasury systems.
+        
+        Key challenge: MT940 has 60+ subfield codes in field 86 (Statement Line Supplementary 
+        Details) that must be intelligently parsed and mapped to structured ISO 20022 elements.
+      </Description>
+      
+      <UseCases>
+        <UseCase>Daily account statement delivery to corporate customers</UseCase>
+        <UseCase>Intraday statement for real-time cash visibility</UseCase>
+        <UseCase>Cash management system (TMS) integration</UseCase>
+        <UseCase>Accounts receivable reconciliation</UseCase>
+        <UseCase>Treasury operations and cash positioning</UseCase>
+        <UseCase>Automated bank reconciliation software integration</UseCase>
+      </UseCases>
+      
+      <ApplicableDomains>
+        Cash Management, Treasury Operations, Corporate Banking, Account Services,
+        Reconciliation Systems, ERP Integration, TMS (Treasury Management Systems)
+      </ApplicableDomains>
+      
+      <MigrationContext>
+        <Initiative>SWIFT ISO 20022 Migration - Statements Category</Initiative>
+        <Impact>Affects 90% of corporate customers using electronic statements</Impact>
+        <Timeline>Must support both formats until November 2025</Timeline>
+        <Challenge>Complex field 86 parsing with 60+ bank-specific codes</Challenge>
+      </MigrationContext>
+    </BusinessContext>
+    
+    <TechnicalSpecifications>
+      <SourceFormat>SWIFT MT940 (ISO 15022)</SourceFormat>
+      <TargetFormat>ISO 20022 camt.053.001.08 (XML)</TargetFormat>
+      <ProcessingMode>BATCH and REAL_TIME</ProcessingMode>
+      <AverageProcessingTime>100ms per statement (10-50 entries)</AverageProcessingTime>
+      <MaxProcessingTime>2000ms</MaxProcessingTime>
+      <ThroughputCapacity>1000 statements/second</ThroughputCapacity>
+    </TechnicalSpecifications>
+    
+    <ComplianceRequirements>
+      <Regulation>SWIFT Standards MT940 Usage Guidelines</Regulation>
+      <Regulation>ISO 20022 camt.053 Implementation Guidelines</Regulation>
+      <Regulation>SEPA Reporting Requirements (if applicable)</Regulation>
+      <Regulation>Corporate Customer Agreement Terms</Regulation>
+      <Regulation>GDPR - Customer Data Protection</Regulation>
+    </ComplianceRequirements>
+    
+    <KeyChallenges>
+      <Challenge>Field 86 parsing - 60+ subfield codes (bank-specific)</Challenge>
+      <Challenge>Transaction code mapping (3-digit MT940 → 4-char ISO 20022)</Challenge>
+      <Challenge>Unstructured information → Structured ISO 20022 elements</Challenge>
+      <Challenge>Multiple statements per message (MT940) → Single statement (camt.053)</Challenge>
+      <Challenge>Date/time handling (MT940 only dates, camt.053 has timestamps)</Challenge>
+      <Challenge>Currency handling in multi-currency statements</Challenge>
+    </KeyChallenges>
+  </GeneralInformation>
+  
+  <!-- ============================================= -->
+  <!-- SOURCE MESSAGE STRUCTURE (MT940) -->
+  <!-- ============================================= -->
+  <SourceMessage>
+    <MessageType>MT940</MessageType>
+    <MessageName>Customer Statement Message</MessageName>
+    <Standard>SWIFT ISO 15022</Standard>
+    <Category>Account Statements</Category>
+    
+    <Fields>
+      
+      <!-- Field 1: Transaction Reference Number (20) -->
+      <Field id="FIELD_01">
+        <FieldTag>:20:</FieldTag>
+        <FieldName>Transaction Reference Number</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>16</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Format>16x</Format>
+        <Description>Unique reference for this statement message</Description>
+        <ExampleValue>STMT20260203001</ExampleValue>
+        <ValidationRules>
+          <Rule>Must be unique per account per day</Rule>
+        </ValidationRules>
+      </Field>
+      
+      <!-- Field 2: Account Identification (25) -->
+      <Field id="FIELD_02">
+        <FieldTag>:25:</FieldTag>
+        <FieldName>Account Identification</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>35</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Format>35x</Format>
+        <Description>Account number being reported</Description>
+        <ExampleValue>DE89370400440532013000</ExampleValue>
+        <ValidationRules>
+          <Rule>Often contains IBAN</Rule>
+        </ValidationRules>
+      </Field>
+      
+      <!-- Field 3: Statement Number (28C) -->
+      <Field id="FIELD_03">
+        <FieldTag>:28C:</FieldTag>
+        <FieldName>Statement Number/Sequence Number</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>10</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Format>5n[/5n]</Format>
+        <Description>Statement number and optional sequence</Description>
+        <ExampleValue>00034/001</ExampleValue>
+        <Components>
+          <Component name="StatementNumber" format="5n" description="Sequential statement number"/>
+          <Component name="SequenceNumber" format="5n" optional="true" description="Sequence if multiple pages"/>
+        </Components>
+        <ValidationRules>
+          <Rule>Format: NNNNN or NNNNN/NNNNN</Rule>
+        </ValidationRules>
+      </Field>
+      
+      <!-- Field 4: Opening Balance (60F/60M) -->
+      <Field id="FIELD_04">
+        <FieldTag>:60F:</FieldTag>
+        <AlternativeTags>
+          <Tag>:60M:</Tag>
+        </AlternativeTags>
+        <FieldName>Opening Balance</FieldName>
+        <DataType>COMPOSITE</DataType>
+        <Mandatory>true</Mandatory>
+        <Format>1!a6!n3!a15d</Format>
+        <Description>Opening balance of the statement period</Description>
+        <ExampleValue>C260203EUR50000,00</ExampleValue>
+        <Components>
+          <Component name="DebitCreditIndicator" type="CODE" format="1!a" position="1" description="D=Debit, C=Credit"/>
+          <Component name="Date" type="DATE" format="6!n" position="2-7" description="YYMMDD"/>
+          <Component name="Currency" type="STRING" format="3!a" position="8-10" description="ISO 4217"/>
+          <Component name="Amount" type="DECIMAL" format="15d" position="11+" description="Amount"/>
+        </Components>
+        <Note>:60F: = First opening balance, :60M: = Intermediate opening balance</Note>
+      </Field>
+      
+      <!-- Field 5: Statement Line (61) - REPEATABLE -->
+      <Field id="FIELD_05">
+        <FieldTag>:61:</FieldTag>
+        <FieldName>Statement Line</FieldName>
+        <DataType>COMPOSITE</DataType>
+        <Mandatory>false</Mandatory>
+        <Repeatable>true</Repeatable>
+        <Format>6!n[4!n]2a[1!a]15d1!a3!c16x[//16x][34x]</Format>
+        <Description>Individual transaction entry</Description>
+        <ExampleValue>260203C5000,00NMSCNONREF//INVOICE2026001</ExampleValue>
+        <Components>
+          <Component name="ValueDate" type="DATE" format="6!n" description="YYMMDD"/>
+          <Component name="EntryDate" type="DATE" format="4!n" optional="true" description="MMDD"/>
+          <Component name="DebitCreditMark" type="CODE" format="2a" description="D, C, RD, RC"/>
+          <Component name="FundsCode" type="CODE" format="1!a" optional="true" description="D, C"/>
+          <Component name="Amount" type="DECIMAL" format="15d" description="Transaction amount"/>
+          <Component name="TransactionType" type="CODE" format="1!a3!c" description="SWIFT transaction code"/>
+          <Component name="CustomerReference" type="STRING" format="16x" description="Customer ref"/>
+          <Component name="BankReference" type="STRING" format="16x" optional="true" description="//Bank ref"/>
+          <Component name="SupplementaryDetails" type="STRING" format="34x" optional="true" description="Additional info"/>
+        </Components>
+        <TransactionTypeCodes>
+          <Code>NMSC - Non-SWIFT Credit</Code>
+          <Code>NDDT - Domestic Debit Transfer</Code>
+          <Code>NCHG - Charges</Code>
+          <Code>NSTO - Standing Order</Code>
+          <Code>NTRF - Transfer</Code>
+          <Code>NCHK - Check</Code>
+          <Code>NCMS - Cash Management</Code>
+        </TransactionTypeCodes>
+      </Field>
+      
+      <!-- Field 6: Information to Account Owner (86) - REPEATABLE -->
+      <Field id="FIELD_06">
+        <FieldTag>:86:</FieldTag>
+        <FieldName>Information to Account Owner</FieldName>
+        <DataType>TEXT</DataType>
+        <MaxLength>390</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Repeatable>true</Repeatable>
+        <Format>6*65x</Format>
+        <Description>Supplementary details for preceding :61: field</Description>
+        <ExampleValue>?20SEPA CREDIT TRANSFER?21FROM ACME CORP?22INVOICE 2026-001?30SOGEFRPPXXX?31FR7630006000011234567890189?32ACME CORPORATION</ExampleValue>
+        <SubfieldCodes>
+          <Subfield code="00" description="Transaction type identification"/>
+          <Subfield code="10" description="Prima Nota number"/>
+          <Subfield code="20-29" description="Transaction description"/>
+          <Subfield code="30" description="BIC of ordering institution"/>
+          <Subfield code="31" description="Account number of ordering party"/>
+          <Subfield code="32-33" description="Name of ordering party"/>
+          <Subfield code="34" description="Text key addition"/>
+          <Subfield code="60-63" description="Name of ultimate ordering party"/>
+        </SubfieldCodes>
+        <Note>
+          Field 86 structure is bank-specific. Most banks use ?XX codes for structured data.
+          This is THE most complex field to parse in MT940.
+        </Note>
+      </Field>
+      
+      <!-- Field 7: Closing Balance (62F/62M) -->
+      <Field id="FIELD_07">
+        <FieldTag>:62F:</FieldTag>
+        <AlternativeTags>
+          <Tag>:62M:</Tag>
+        </AlternativeTags>
+        <FieldName>Closing Balance</FieldName>
+        <DataType>COMPOSITE</DataType>
+        <Mandatory>true</Mandatory>
+        <Format>1!a6!n3!a15d</Format>
+        <Description>Closing balance of the statement period</Description>
+        <ExampleValue>C260203EUR55000,00</ExampleValue>
+        <Components>
+          <Component name="DebitCreditIndicator" type="CODE" format="1!a"/>
+          <Component name="Date" type="DATE" format="6!n"/>
+          <Component name="Currency" type="STRING" format="3!a"/>
+          <Component name="Amount" type="DECIMAL" format="15d"/>
+        </Components>
+        <Note>:62F: = Final closing balance, :62M: = Intermediate closing balance</Note>
+      </Field>
+      
+      <!-- Field 8: Closing Available Balance (64) - OPTIONAL -->
+      <Field id="FIELD_08">
+        <FieldTag>:64:</FieldTag>
+        <FieldName>Closing Available Balance</FieldName>
+        <DataType>COMPOSITE</DataType>
+        <Mandatory>false</Mandatory>
+        <Format>1!a6!n3!a15d</Format>
+        <Description>Available balance (ledger balance minus holds)</Description>
+        <ExampleValue>C260203EUR54500,00</ExampleValue>
+        <Components>
+          <Component name="DebitCreditIndicator" type="CODE"/>
+          <Component name="Date" type="DATE"/>
+          <Component name="Currency" type="STRING"/>
+          <Component name="Amount" type="DECIMAL"/>
+        </Components>
+      </Field>
+      
+      <!-- Field 9: Forward Available Balance (65) - OPTIONAL, REPEATABLE -->
+      <Field id="FIELD_09">
+        <FieldTag>:65:</FieldTag>
+        <FieldName>Forward Available Balance</FieldName>
+        <DataType>COMPOSITE</DataType>
+        <Mandatory>false</Mandatory>
+        <Repeatable>true</Repeatable>
+        <Format>1!a6!n3!a15d</Format>
+        <Description>Projected available balance for future dates</Description>
+        <ExampleValue>C260204EUR53000,00</ExampleValue>
+      </Field>
+      
+      <!-- Field 10: Non-SWIFT Transaction Reference (21) - OPTIONAL -->
+      <Field id="FIELD_10">
+        <FieldTag>:21:</FieldTag>
+        <FieldName>Related Reference</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>16</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>Reference to related message</Description>
+        <ExampleValue>RELREF123</ExampleValue>
+      </Field>
+      
+    </Fields>
+    
+    <MessageStructure>
+      <Description>
+        MT940 structure:
+        :20:  - Transaction Reference (mandatory, once)
+        :25:  - Account ID (mandatory, once)
+        :28C: - Statement/Sequence Number (mandatory, once)
+        :60F: - Opening Balance (mandatory, once)
+        [:61:/:86:]* - Statement Lines with details (optional, repeatable as pairs)
+        :62F: - Closing Balance (mandatory, once)
+        [:64:]? - Available Balance (optional, once)
+        [:65:]* - Forward Available Balances (optional, repeatable)
+      </Description>
+    </MessageStructure>
+  </SourceMessage>
+  
+  <!-- ============================================= -->
+  <!-- TARGET MESSAGE STRUCTURE (camt.053) -->
+  <!-- ============================================= -->
+  <TargetMessage>
+    <MessageType>camt.053.001.08</MessageType>
+    <MessageName>BankToCustomerStatement</MessageName>
+    <Standard>ISO 20022</Standard>
+    <Schema>camt.053.001.08.xsd</Schema>
+    <Namespace>urn:iso:std:iso:20022:tech:xsd:camt.053.001.08</Namespace>
+    <Category>Cash Management - Account Reporting</Category>
+    
+    <Fields>
+      
+      <!-- Field 1: Message Identification -->
+      <Field id="FIELD_01">
+        <XPath>/Document/BkToCstmrStmt/GrpHdr/MsgId</XPath>
+        <FieldName>Message Identification</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>35</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Description>Unique message identifier</Description>
+        <ExampleValue>STMT-20260203-001-CAMT053</ExampleValue>
+      </Field>
+      
+      <!-- Field 2: Creation Date Time -->
+      <Field id="FIELD_02">
+        <XPath>/Document/BkToCstmrStmt/GrpHdr/CreDtTm</XPath>
+        <FieldName>Creation Date Time</FieldName>
+        <DataType>DATETIME</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Timestamp when statement was generated</Description>
+        <ExampleValue>2026-02-03T23:59:59Z</ExampleValue>
+      </Field>
+      
+      <!-- Field 3: Statement Identification -->
+      <Field id="FIELD_03">
+        <XPath>/Document/BkToCstmrStmt/Stmt/Id</XPath>
+        <FieldName>Statement Identification</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>35</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Description>Unique statement identifier</Description>
+        <ExampleValue>STMT-00034</ExampleValue>
+      </Field>
+      
+      <!-- Field 4: Account IBAN -->
+      <Field id="FIELD_04">
+        <XPath>/Document/BkToCstmrStmt/Stmt/Acct/Id/IBAN</XPath>
+        <FieldName>Account IBAN</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>34</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>IBAN of the account</Description>
+        <ExampleValue>DE89370400440532013000</ExampleValue>
+      </Field>
+      
+      <!-- Field 5: Account Currency -->
+      <Field id="FIELD_05">
+        <XPath>/Document/BkToCstmrStmt/Stmt/Acct/Ccy</XPath>
+        <FieldName>Account Currency</FieldName>
+        <DataType>STRING</DataType>
+        <Length>3</Length>
+        <Mandatory>false</Mandatory>
+        <Description>ISO 4217 currency code</Description>
+        <ExampleValue>EUR</ExampleValue>
+      </Field>
+      
+      <!-- Field 6: Opening Balance -->
+      <Field id="FIELD_06">
+        <XPath>/Document/BkToCstmrStmt/Stmt/Bal[Tp/CdOrPrtry/Cd='OPBD']</XPath>
+        <FieldName>Opening Balance</FieldName>
+        <DataType>STRUCTURED</DataType>
+        <Mandatory>true</Mandatory>
+        <SubFields>
+          <SubField name="Amt" xpath="Amt" description="Balance amount"/>
+          <SubField name="CdtDbtInd" xpath="CdtDbtInd" description="CRDT or DBIT"/>
+          <SubField name="Dt" xpath="Dt/Dt" description="Balance date"/>
+        </SubFields>
+        <Description>Opening booked balance</Description>
+      </Field>
+      
+      <!-- Field 7: Closing Balance -->
+      <Field id="FIELD_07">
+        <XPath>/Document/BkToCstmrStmt/Stmt/Bal[Tp/CdOrPrtry/Cd='CLBD']</XPath>
+        <FieldName>Closing Balance</FieldName>
+        <DataType>STRUCTURED</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Closing booked balance</Description>
+      </Field>
+      
+      <!-- Field 8: Entry (Transaction) - REPEATABLE -->
+      <Field id="FIELD_08">
+        <XPath>/Document/BkToCstmrStmt/Stmt/Ntry</XPath>
+        <FieldName>Entry</FieldName>
+        <DataType>STRUCTURED</DataType>
+        <Mandatory>false</Mandatory>
+        <Repeatable>true</Repeatable>
+        <SubFields>
+          <SubField name="Amt" xpath="Amt" description="Transaction amount"/>
+          <SubField name="CdtDbtInd" xpath="CdtDbtInd" description="CRDT or DBIT"/>
+          <SubField name="Sts" xpath="Sts" description="Status (BOOK, PDNG, INFO)"/>
+          <SubField name="BookgDt" xpath="BookgDt/Dt" description="Booking date"/>
+          <SubField name="ValDt" xpath="ValDt/Dt" description="Value date"/>
+          <SubField name="BkTxCd" xpath="BkTxCd" description="Bank transaction code"/>
+          <SubField name="NtryDtls" xpath="NtryDtls" description="Entry details"/>
+        </SubFields>
+        <Description>Individual transaction entry</Description>
+      </Field>
+      
+      <!-- Field 9: Transaction Details -->
+      <Field id="FIELD_09">
+        <XPath>/Document/BkToCstmrStmt/Stmt/Ntry/NtryDtls/TxDtls</XPath>
+        <FieldName>Transaction Details</FieldName>
+        <DataType>STRUCTURED</DataType>
+        <Mandatory>false</Mandatory>
+        <SubFields>
+          <SubField name="Refs" xpath="Refs" description="References"/>
+          <SubField name="RltdPties" xpath="RltdPties" description="Related parties"/>
+          <SubField name="RltdAgts" xpath="RltdAgts" description="Related agents"/>
+          <SubField name="RmtInf" xpath="RmtInf" description="Remittance information"/>
+        </SubFields>
+        <Description>Detailed transaction information</Description>
+      </Field>
+      
+      <!-- Field 10: Closing Available Balance -->
+      <Field id="FIELD_10">
+        <XPath>/Document/BkToCstmrStmt/Stmt/Bal[Tp/CdOrPrtry/Cd='CLAV']</XPath>
+        <FieldName>Closing Available Balance</FieldName>
+        <DataType>STRUCTURED</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Closing available balance</Description>
+      </Field>
+      
+    </Fields>
+  </TargetMessage>
+  
+  <!-- ============================================= -->
+  <!-- FIELD MAPPINGS -->
+  <!-- ============================================= -->
+  <FieldMappings>
+    
+    <!-- Mapping 1: Message Identification -->
+    <Mapping id="MAPPING_01">
+      <SourceField ref="FIELD_01"/>
+      <TargetField ref="FIELD_01"/>
+      
+      <MappingFormula>
+        <Type>ENHANCEMENT_WITH_SUFFIX</Type>
+        <Expression>
+          mt940_ref = source.field_20
+          timestamp = current_timestamp_compact()
+          target.MsgId = mt940_ref + "-CAMT053-" + timestamp
+        </Expression>
+        <PseudoCode>
+          // MT940 field 20 is transaction reference (max 16 chars)
+          // camt.053 MsgId can be 35 chars - add suffix for distinction
+          
+          mt940_reference = source.field_20
+          current_time = format_timestamp("YYMMDDHHmmss")
+          
+          // Construct unique message ID
+          message_id = mt940_reference + "-CAMT053-" + current_time
+          
+          // Ensure length <= 35
+          if (length(message_id) > 35) then
+            message_id = substring(message_id, 1, 35)
+          endif
+          
+          return message_id
+        </PseudoCode>
+      </MappingFormula>
+      
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_20 != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT</ElseAction>
+        </Condition>
+        
+        <Condition priority="2">
+          <Type>LENGTH_VALIDATION</Type>
+          <Expression>length(formatted_msg_id) &lt;= 35</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>TRUNCATE</ElseAction>
+        </Condition>
+      </Conditions>
+      
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>Statement cannot be uniquely identified</ImpactIfFails>
+        <BusinessRationale>Unique identifier for statement tracking and reconciliation</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+      </General>
+    </Mapping>
+    
+    <!-- Mapping 2: Creation Date Time -->
+    <Mapping id="MAPPING_02">
+      <SourceField ref="NONE"/>
+      <TargetField ref="FIELD_02"/>
+      
+      <MappingFormula>
+        <Type>SYSTEM_GENERATED_TIMESTAMP</Type>
+        <Expression>
+          target.CreDtTm = current_datetime_iso8601()
+        </Expression>
+        <PseudoCode>
+          // MT940 doesn't have creation timestamp, only dates
+          // Generate timestamp at conversion time
+          
+          creation_timestamp = system_current_time()
+          iso_formatted = format_datetime(creation_timestamp, "YYYY-MM-DDTHH:mm:ssZ")
+          
+          return iso_formatted
+        </PseudoCode>
+      </MappingFormula>
+      
+      <Conditions>
+        <Condition priority="1">
+          <Type>ALWAYS_TRUE</Type>
+          <Expression>true</Expression>
+          <Action>GENERATE_TIMESTAMP</Action>
+          <ElseAction>N/A</ElseAction>
+        </Condition>
+      </Conditions>
+      
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Incorrect timestamp but not critical</ImpactIfFails>
+        <BusinessRationale>ISO 20022 requires precise timestamp</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <Note>Use end-of-day time for daily statements, current time for intraday</Note>
+      </General>
+    </Mapping>
+    
+    <!-- Mapping 3: Statement Identification -->
+    <Mapping id="MAPPING_03">
+      <SourceField ref="FIELD_03"/>
+      <TargetField ref="FIELD_03"/>
+      
+      <MappingFormula>
+        <Type>EXTRACTION_AND_FORMATTING</Type>
+        <Expression>
+          statement_seq = source.field_28C
+          
+          // Parse: 00034/001 → statement=00034, sequence=001
+          IF contains(statement_seq, '/') THEN
+            parts = split(statement_seq, '/')
+            statement_number = parts[0]
+            sequence_number = parts[1]
+            target.Id = "STMT-" + statement_number + "-" + sequence_number
+          ELSE
+            target.Id = "STMT-" + statement_seq
+          ENDIF
+        </Expression>
+        <PseudoCode>
+          // Field 28C format: NNNNN or NNNNN/NNNNN
+          field_28c = source.field_28C
+          
+          if (contains(field_28c, "/")) then
+            // Has sequence number
+            parts = split(field_28c, "/")
+            stmt_num = parts[0]
+            seq_num = parts[1]
+            
+            // Format: STMT-00034-001
+            statement_id = "STMT-" + stmt_num + "-" + seq_num
+          else
+            // No sequence
+            statement_id = "STMT-" + field_28c
+          endif
+          
+          return statement_id
+        </PseudoCode>
+      </MappingFormula>
+      
+      <Conditions>
+        <Condition priority="1">
+          <Type>FORMAT_VALIDATION</Type>
+          <Expression>matches(field_28c, "^\d{1,5}(\/\d{1,5})?$")</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT</ElseAction>
+        </Condition>
+      </Conditions>
+      
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>Statement identification confusion</ImpactIfFails>
+        <BusinessRationale>Sequential statement numbering for audit trail</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+      </General>
+    </Mapping>
+    
+    <!-- Mapping 4: Account Identification -->
+    <Mapping id="MAPPING_04">
+      <SourceField ref="FIELD_02"/>
+      <TargetField ref="FIELD_04"/>
+      
+      <MappingFormula>
+        <Type>IBAN_EXTRACTION_WITH_VALIDATION</Type>
+        <Expression>
+          account_id = source.field_25
+          
+          // Check if IBAN format
+          IF is_iban_format(account_id) THEN
+            target.Acct_Id_IBAN = account_id
+          ELSE
+            // Not IBAN - use Other identification
+            target.Acct_Id_Othr_Id = account_id
+          ENDIF
+        </Expression>
+        <PseudoCode>
+          // Field 25 can contain IBAN or other account format
+          account_string = source.field_25
+          
+          // Remove any spaces or formatting
+          account_clean = remove_spaces(account_string)
+          
+          // Check if IBAN (starts with 2 letters + 2 digits)
+          if (matches(account_clean, "^[A-Z]{2}\d{2}[A-Z0-9]+$")) then
+            // Validate IBAN checksum
+            if (is_valid_iban_checksum(account_clean)) then
+              iban = account_clean
+              other_id = null
+            else
+              log_warning("Invalid IBAN checksum in field 25")
+              iban = null
+              other_id = account_clean
+            endif
+          else
+            // Not IBAN format
+            iban = null
+            other_id = account_clean
+          endif
+          
+          return {
+            iban: iban,
+            other_id: other_id
+          }
+        </PseudoCode>
+      </MappingFormula>
+      
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>account_id != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT</ElseAction>
+        </Condition>
+        
+        <Condition priority="2">
+          <Type>IBAN_VALIDATION</Type>
+          <Expression>is_iban → validate_checksum</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>LOG_WARNING and use as Other ID</ElseAction>
+        </Condition>
+      </Conditions>
+      
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Statement for wrong account</ImpactIfFails>
+        <BusinessRationale>Identifies which account the statement belongs to</BusinessRationale>
+        <PerformanceImpact>LOW</PerformanceImpact>
+      </General>
+    </Mapping>
+    
+    <!-- Mapping 5: Opening Balance -->
+    <Mapping id="MAPPING_05">
+      <SourceField ref="FIELD_04"/>
+      <TargetField ref="FIELD_06"/>
+      
+      <MappingFormula>
+        <Type>COMPOSITE_FIELD_DECOMPOSITION</Type>
+        <Expression>
+          field_60f = source.field_60F
+          
+          // Parse: C260203EUR50000,00
+          dc_indicator = substring(field_60f, 1, 1)  // C or D
+          date_yymmdd = substring(field_60f, 2, 6)   // 260203
+          currency = substring(field_60f, 8, 3)      // EUR
+          amount_str = substring(field_60f, 11)      // 50000,00
+          
+          // Convert to ISO 20022 format
+          target.Bal = {
+            Tp: { CdOrPrtry: { Cd: "OPBD" } },  // Opening Booked
+            Amt: {
+              _text: parse_amount(amount_str),
+              _attributes: { Ccy: currency }
+            },
+            CdtDbtInd: (dc_indicator == 'C') ? "CRDT" : "DBIT",
+            Dt: { Dt: convert_date_yymmdd_to_iso(date_yymmdd) }
+          }
+        </Expression>
+        <PseudoCode>
+          // Field 60F format: D/C + YYMMDD + CCY + Amount
+          field_60f = source.field_60F
+          
+          // Extract components
+          dc_mark = substring(field_60f, 1, 1)
+          date_string = substring(field_60f, 2, 6)
+          currency_code = substring(field_60f, 8, 3)
+          amount_string = substring(field_60f, 11)
+          
+          // Parse date YYMMDD → YYYY-MM-DD
+          year_yy = substring(date_string, 1, 2)
+          month = substring(date_string, 3, 2)
+          day = substring(date_string, 5, 2)
+          
+          // Determine century (assume 20xx if YY >= 50, else 21xx)
+          if (year_yy >= 50) then
+            century = "20"
+          else
+            century = "21"
+          endif
+          
+          date_iso = century + year_yy + "-" + month + "-" + day
+          
+          // Parse amount (SWIFT uses comma as decimal)
+          amount_decimal = replace(amount_string, ",", ".")
+          amount_value = parse_decimal(amount_decimal)
+          
+          // Determine credit/debit indicator
+          if (dc_mark == "C") then
+            credit_debit_ind = "CRDT"
+          else if (dc_mark == "D") then
+            credit_debit_ind = "DBIT"
+          else
+            throw error "Invalid D/C indicator: " + dc_mark
+          endif
+          
+          // Construct camt.053 balance structure
+          opening_balance = {
+            Type: {
+              CodeOrProprietary: {
+                Code: "OPBD"  // Opening Booked Balance
+              }
+            },
+            Amount: {
+              value: amount_value,
+              Currency: currency_code
+            },
+            CreditDebitIndicator: credit_debit_ind,
+            Date: {
+              Date: date_iso
+            }
+          }
+          
+          return opening_balance
+        </PseudoCode>
+      </MappingFormula>
+      
+      <Conditions>
+        <Condition priority="1">
+          <Type>FIELD_PRESENCE</Type>
+          <Expression>source.field_60F != null OR source.field_60M != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT (mandatory field)</ElseAction>
+        </Condition>
+        
+        <Condition priority="2">
+          <Type>FORMAT_VALIDATION</Type>
+          <Expression>matches(field_60f, "^[CD]\d{6}[A-Z]{3}[\d,]+$")</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT</ElseAction>
+        </Condition>
+        
+        <Condition priority="3">
+          <Type>DATE_VALIDATION</Type>
+          <Expression>is_valid_date(parsed_date)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT</ElseAction>
+        </Condition>
+        
+        <Condition priority="4">
+          <Type>CURRENCY_VALIDATION</Type>
+          <Expression>is_valid_iso4217(currency)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT</ElseAction>
+        </Condition>
+      </Conditions>
+      
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Reconciliation impossible - balance mismatch</ImpactIfFails>
+        <BusinessRationale>
+          Opening balance is foundation for statement reconciliation.
+          Must match closing balance of previous statement.
+        </BusinessRationale>
+        <PerformanceImpact>LOW</PerformanceImpact>
+        <ReconciliationNote>
+          Opening balance of day N must equal closing balance of day N-1.
+          Any mismatch indicates missing statement or data corruption.
+        </ReconciliationNote>
+      </General>
+    </Mapping>
+    
+    <!-- Mapping 6: Closing Balance -->
+    <Mapping id="MAPPING_06">
+      <SourceField ref="FIELD_07"/>
+      <TargetField ref="FIELD_07"/>
+      
+      <MappingFormula>
+        <Type>COMPOSITE_FIELD_DECOMPOSITION</Type>
+        <Expression>
+          // Same logic as opening balance (Mapping 5)
+          field_62f = source.field_62F
+          
+          // Parse components
+          dc_indicator = substring(field_62f, 1, 1)
+          date_yymmdd = substring(field_62f, 2, 6)
+          currency = substring(field_62f, 8, 3)
+          amount_str = substring(field_62f, 11)
+          
+          target.Bal = {
+            Tp: { CdOrPrtry: { Cd: "CLBD" } },  // Closing Booked
+            Amt: {
+              _text: parse_amount(amount_str),
+              _attributes: { Ccy: currency }
+            },
+            CdtDbtInd: (dc_indicator == 'C') ? "CRDT" : "DBIT",
+            Dt: { Dt: convert_date_yymmdd_to_iso(date_yymmdd) }
+          }
+        </Expression>
+        <PseudoCode>
+          // Identical logic to Mapping 5 but for closing balance
+          field_62f = source.field_62F
+          
+          // Extract and parse (same as opening balance)
+          // ...
+          
+          closing_balance = {
+            Type: {
+              CodeOrProprietary: {
+                Code: "CLBD"  // Closing Booked Balance
+              }
+            },
+            Amount: { value: amount_value, Currency: currency_code },
+            CreditDebitIndicator: credit_debit_ind,
+            Date: { Date: date_iso }
+          }
+          
+          return closing_balance
+        </PseudoCode>
+      </MappingFormula>
+      
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_62F != null OR source.field_62M != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT</ElseAction>
+        </Condition>
+        
+        <Condition priority="2">
+          <Type>BALANCE_RECONCILIATION</Type>
+          <Expression>closing_balance == opening_balance + sum(credits) - sum(debits)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>LOG_ERROR and FLAG for investigation</ElseAction>
+        </Condition>
+      </Conditions>
+      
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Balance mismatch - reconciliation fails</ImpactIfFails>
+        <BusinessRationale>
+          Closing balance must mathematically equal opening + movements.
+          Foundation of account reconciliation.
+        </BusinessRationale>
+        <PerformanceImpact>LOW</PerformanceImpact>
+        <ReconciliationFormula>
+          Closing Balance = Opening Balance + Credits - Debits
+          Must validate this equation before delivering statement.
+        </ReconciliationFormula>
+      </General>
+    </Mapping>
+    
+    <!-- Mapping 7: Statement Line (Transaction Entry) -->
+    <Mapping id="MAPPING_07">
+      <SourceField ref="FIELD_05"/>
+      <TargetField ref="FIELD_08"/>
+      
+      <MappingFormula>
+        <Type>COMPLEX_TRANSACTION_PARSING</Type>
+        <Expression>
+          // Field 61 format: YYMMDD[MMDD]D/C[D/C]Amount+Type+Reference[//BankRef][SupplDetails]
+          field_61 = source.field_61
+          
+          // Parse components
+          value_date_yymmdd = substring(field_61, 1, 6)
+          entry_date_mmdd = extract_entry_date(field_61, position 7-10)
+          dc_mark = extract_dc_mark(field_61)  // D, C, RD, RC
+          amount_str = extract_amount(field_61)
+          transaction_type = extract_transaction_type(field_61)  // e.g., NMSC
+          customer_ref = extract_customer_reference(field_61)
+          bank_ref = extract_bank_reference(field_61)  // after //
+          
+          // Build camt.053 Entry
+          target.Ntry = {
+            Amt: {
+              _text: parse_amount(amount_str),
+              _attributes: { Ccy: statement_currency }
+            },
+            CdtDbtInd: map_dc_to_credit_debit(dc_mark),
+            Sts: "BOOK",  // Booked (vs PDNG, INFO)
+            BookgDt: { Dt: convert_date(value_date_yymmdd) },
+            ValDt: { Dt: convert_date(value_date_yymmdd) },
+            BkTxCd: map_transaction_type_to_iso20022(transaction_type),
+            AcctSvcrRef: bank_ref,
+            NtryDtls: {
+              // Details from field 86 (next mapping)
+            }
+          }
+        </Expression>
+        <PseudoCode>
+          // Field 61 is THE most complex field to parse in MT940
+          // Format: YYMMDD[MMDD]{D|C|RD|RC}[D|C]Amount+TxType+CustRef[//BankRef][/SupplDtls]
+          
+          field_61 = source.field_61
+          pos = 1
+          
+          // 1. Value date (mandatory, 6 chars)
+          value_date_yy = substring(field_61, pos, 6)
+          pos += 6
+          
+          // 2. Entry date (optional, 4 chars MMDD)
+          if (is_digit(substring(field_61, pos, 1))) then
+            entry_date_mmdd = substring(field_61, pos, 4)
+            pos += 4
+          else
+            entry_date_mmdd = null
+          endif
+          
+          // 3. Debit/Credit mark (2 chars: D, C, RD, RC)
+          dc_mark = substring(field_61, pos, 2)
+          if (dc_mark IN ["RD", "RC"]) then
+            // Reversal
+            is_reversal = true
+            credit_debit = (dc_mark == "RC") ? "CRDT" : "DBIT"
+            pos += 2
+          else
+            is_reversal = false
+            dc_mark = substring(field_61, pos, 1)
+            credit_debit = (dc_mark == "C") ? "CRDT" : "DBIT"
+            pos += 1
+          endif
+          
+          // 4. Funds code (optional, 1 char D or C)
+          if (substring(field_61, pos, 1) IN ["D", "C"]) then
+            funds_code = substring(field_61, pos, 1)
+            pos += 1
+          else
+            funds_code = null
+          endif
+          
+          // 5. Amount (variable length, up to 15 digits + comma)
+          amount_end = find_next_non_numeric(field_61, pos)
+          amount_str = substring(field_61, pos, amount_end - pos)
+          amount_decimal = replace(amount_str, ",", ".")
+          amount_value = parse_decimal(amount_decimal)
+          pos = amount_end
+          
+          // 6. Transaction type (4 chars, e.g., NMSC, NTRF)
+          transaction_type = substring(field_61, pos, 4)
+          pos += 4
+          
+          // 7. Customer reference (up to 16 chars, until // or end)
+          ref_end = find(field_61, "//", pos)
+          if (ref_end > 0) then
+            customer_ref = substring(field_61, pos, ref_end - pos)
+            pos = ref_end + 2  // Skip //
+            
+            // 8. Bank reference (after //, up to 16 chars)
+            bank_ref_end = find(field_61, "/", pos)
+            if (bank_ref_end > 0) then
+              bank_ref = substring(field_61, pos, bank_ref_end - pos)
+              pos = bank_ref_end + 1
+              
+              // 9. Supplementary details (rest of field)
+              suppl_details = substring(field_61, pos)
+            else
+              bank_ref = substring(field_61, pos)
+              suppl_details = null
+            endif
+          else
+            customer_ref = substring(field_61, pos)
+            bank_ref = null
+            suppl_details = null
+          endif
+          
+          // Map transaction type to ISO 20022 bank transaction code
+          bank_tx_code = map_swift_code_to_iso20022(transaction_type)
+          
+          // Build Entry structure
+          entry = {
+            Amount: { value: amount_value, Currency: statement_currency },
+            CreditDebitIndicator: credit_debit,
+            ReversalIndicator: is_reversal,
+            Status: "BOOK",
+            BookingDate: { Date: convert_yymmdd_to_iso(value_date_yy) },
+            ValueDate: { Date: convert_yymmdd_to_iso(value_date_yy) },
+            BankTransactionCode: bank_tx_code,
+            AccountServicerReference: bank_ref,
+            AdditionalEntryInformation: suppl_details
+          }
+          
+          return entry
+        </PseudoCode>
+      </MappingFormula>
+      
+      <Conditions>
+        <Condition priority="1">
+          <Type>FORMAT_VALIDATION</Type>
+          <Expression>field_61 matches expected pattern</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>LOG_ERROR and SKIP entry</ElseAction>
+        </Condition>
+        
+        <Condition priority="2">
+          <Type>AMOUNT_VALIDATION</Type>
+          <Expression>amount > 0</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT</ElseAction>
+        </Condition>
+        
+        <Condition priority="3">
+          <Type>TRANSACTION_TYPE_MAPPING</Type>
+          <Expression>transaction_type can be mapped to ISO 20022 code</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>USE_GENERIC_CODE and LOG</ElseAction>
+        </Condition>
+      </Conditions>
+      
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>
+          Transaction data lost or corrupted.
+          Reconciliation impossible.
+        </ImpactIfFails>
+        <BusinessRationale>
+          Each field 61 represents one transaction line.
+          Must be parsed precisely for accurate statement.
+        </BusinessRationale>
+        <PerformanceImpact>MEDIUM (complex string parsing)</PerformanceImpact>
+        <ParsingComplexity>
+          Field 61 is notoriously difficult to parse due to:
+          - Variable-length components
+          - Optional components
+          - No fixed delimiters (except //)
+          - Bank-specific variations
+          Requires robust parser with error handling.
+        </ParsingComplexity>
+      </General>
+    </Mapping>
+    
+    <!-- Mapping 8: Field 86 (Information to Account Owner) -->
+    <Mapping id="MAPPING_08">
+      <SourceField ref="FIELD_06"/>
+      <TargetField ref="FIELD_09"/>
+      
+      <MappingFormula>
+        <Type>STRUCTURED_PARSING_WITH_SUBFIELDS</Type>
+        <Expression>
+          // Field 86 format: ?XX codes for structured data
+          // Example: ?20SEPA CREDIT?21FROM ACME?30SOGEFRPPXXX?31FR76...?32ACME CORP
+          
+          field_86 = source.field_86
+          
+          // Parse subfields (bank-specific codes)
+          subfields = parse_subfields(field_86)  // Returns map of code → value
+          
+          // Build Transaction Details
+          target.NtryDtls.TxDtls = {
+            Refs: {
+              EndToEndId: get_subfield(subfields, '00') OR customer_ref_from_field_61
+            },
+            RltdPties: {
+              Dbtr: {
+                Nm: get_subfield(subfields, '32') OR get_subfield(subfields, '33')
+              },
+              DbtrAcct: {
+                Id: {
+                  IBAN: get_subfield(subfields, '31') if is_iban
+                }
+              }
+            },
+            RltdAgts: {
+              DbtrAgt: {
+                FinInstnId: {
+                  BICFI: get_subfield(subfields, '30')
+                }
+              }
+            },
+            RmtInf: {
+              Ustrd: concatenate(
+                get_subfield(subfields, '20'),
+                get_subfield(subfields, '21'),
+                get_subfield(subfields, '22'),
+                get_subfield(subfields, '23')
+              )
+            }
+          }
+        </Expression>
+        <PseudoCode>
+          // Field 86 is THE MOST COMPLEX field in MT940
+          // Contains supplementary details for preceding field 61
+          // Format: ?XXcontent where XX is 2-digit code
+          
+          field_86 = source.field_86
+          
+          // Parse subfields
+          subfields = {}
+          lines = split_by_newline(field_86)
+          
+          current_code = null
+          current_value = ""
+          
+          for each line in lines do
+            if (starts_with(line, "?")) then
+              // New subfield
+              if (current_code != null) then
+                // Save previous subfield
+                subfields[current_code] = trim(current_value)
+              endif
+              
+              // Extract code (2 digits after ?)
+              current_code = substring(line, 2, 2)
+              current_value = substring(line, 4)
+            else
+              // Continuation of previous subfield
+              current_value += " " + line
+            endif
+          end for
+          
+          // Save last subfield
+          if (current_code != null) then
+            subfields[current_code] = trim(current_value)
+          endif
+          
+          // Map subfields to ISO 20022 elements
+          // Common subfield codes (bank-specific, but generally consistent):
+          // ?00 = Transaction type
+          // ?10 = Prima Nota number
+          // ?20-29 = Transaction description (remittance info)
+          // ?30 = Debtor agent BIC
+          // ?31 = Debtor account
+          // ?32-33 = Debtor name
+          // ?34 = Text key addition
+          // ?60-63 = Ultimate debtor name
+          
+          transaction_details = {
+            References: {
+              EndToEndIdentification: subfields["00"] or entry.customer_reference
+            },
+            RelatedParties: {},
+            RelatedAgents: {},
+            RemittanceInformation: {}
+          }
+          
+          // Debtor name
+          if (subfields["32"] != null) then
+            transaction_details.RelatedParties.Debtor = {
+              Name: subfields["32"]
+            }
+            
+            // Add continuation if present
+            if (subfields["33"] != null) then
+              transaction_details.RelatedParties.Debtor.Name += " " + subfields["33"]
+            endif
+          endif
+          
+          // Debtor account
+          if (subfields["31"] != null) then
+            account_string = subfields["31"]
+            
+            if (is_iban(account_string)) then
+              transaction_details.RelatedParties.DebtorAccount = {
+                Identification: {
+                  IBAN: account_string
+                }
+              }
+            else
+              transaction_details.RelatedParties.DebtorAccount = {
+                Identification: {
+                  Other: {
+                    Identification: account_string
+                  }
+                }
+              }
+            endif
+          endif
+          
+          // Debtor agent (bank BIC)
+          if (subfields["30"] != null) then
+            transaction_details.RelatedAgents.DebtorAgent = {
+              FinancialInstitutionIdentification: {
+                BICFI: subfields["30"]
+              }
+            }
+          endif
+          
+          // Remittance information (codes 20-29)
+          remittance_lines = []
+          for code in ["20", "21", "22", "23", "24", "25", "26", "27", "28", "29"] do
+            if (subfields[code] != null) then
+              remittance_lines.add(subfields[code])
+            endif
+          end for
+          
+          if (remittance_lines.length > 0) then
+            transaction_details.RemittanceInformation.Unstructured = join(remittance_lines, " ")
+          endif
+          
+          return transaction_details
+        </PseudoCode>
+      </MappingFormula>
+      
+      <Conditions>
+        <Condition priority="1">
+          <Type>OPTIONAL_FIELD</Type>
+          <Expression>true</Expression>
+          <Action>PROCEED if present, skip if null</Action>
+          <ElseAction>N/A</ElseAction>
+        </Condition>
+        
+        <Condition priority="2">
+          <Type>SUBFIELD_PARSING</Type>
+          <Expression>can_parse_subfield_structure</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>USE_RAW_TEXT as unstructured</ElseAction>
+        </Condition>
+      </Conditions>
+      
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>
+          Loss of transaction details.
+          Reconciliation difficult for customer.
+        </ImpactIfFails>
+        <BusinessRationale>
+          Field 86 contains critical details for:
+          - Identifying payer/payee
+          - Reconciling invoices
+          - Understanding payment purpose
+        </BusinessRationale>
+        <PerformanceImpact>HIGH (complex parsing, multiple subfields)</PerformanceImpact>
+        <ParsingChallenge>
+          Field 86 is THE BIGGEST CHALLENGE in MT940 conversion:
+          - 60+ possible subfield codes
+          - Bank-specific interpretations
+          - No universal standard
+          - Free-text mixed with structured codes
+          
+          Solution requires:
+          1. Bank-specific mapping tables
+          2. Fuzzy parsing for unrecognized formats
+          3. Fallback to unstructured if structured parsing fails
+          4. Extensive testing with real bank data
+        </ParsingChallenge>
+        <BankSpecificNote>
+          Each bank uses field 86 differently. Examples:
+          - Deutsche Bank: Extensive use of ?20-?29 for remittance
+          - BNP Paribas: ?60-?63 for ultimate party identification
+          - HSBC: Different code structure altogether
+          
+          Conversion must be configurable per bank.
+        </BankSpecificNote>
+      </General>
+    </Mapping>
+    
+    <!-- Mapping 9: Transaction Type Code Mapping -->
+    <Mapping id="MAPPING_09">
+      <SourceField ref="FIELD_05"/>
+      <TargetField ref="FIELD_08"/>
+      <TargetSubField>BkTxCd</TargetSubField>
+      
+      <MappingFormula>
+        <Type>CODE_TRANSLATION_TABLE</Type>
+        <Expression>
+          swift_tx_type = extract_transaction_type_from_field_61(source.field_61)
+          
+          // Map SWIFT 4-char code to ISO 20022 4-char code
+          iso_code = transaction_code_mapping_table[swift_tx_type]
+          
+          IF iso_code != null THEN
+            target.BkTxCd = {
+              Domn: {
+                Cd: iso_code.domain,  // e.g., "PMNT"
+                Fmly: {
+                  Cd: iso_code.family,  // e.g., "RCDT"
+                  SubFmlyCd: iso_code.subfamily  // e.g., "ESCT"
+                }
+              }
+            }
+          ELSE
+            // Generic code if no mapping
+            target.BkTxCd = {
+              Prtry: {
+                Cd: swift_tx_type
+              }
+            }
+          ENDIF
+        </Expression>
+        <PseudoCode>
+          // SWIFT MT940 uses 4-character transaction types (e.g., NMSC, NTRF)
+          // ISO 20022 uses hierarchical bank transaction codes
+          
+          swift_code = extract_from_field_61(transaction_type)
+          
+          // Mapping table (examples - full table has 100+ entries)
+          code_map = {
+            "NMSC": {
+              domain: "PMNT",      // Payments
+              family: "RCDT",      // Received Credit Transfer
+              subfamily: "ESCT"    // SEPA Credit Transfer
+            },
+            "NTRF": {
+              domain: "PMNT",
+              family: "ICDT",      // Issued Credit Transfer
+              subfamily: "DMCT"    // Domestic Credit Transfer
+            },
+            "NDDT": {
+              domain: "PMNT",
+              family: "RDDT",      // Received Direct Debit
+              subfamily: "ESDD"    // SEPA Direct Debit
+            },
+            "NCHK": {
+              domain: "PMNT",
+              family: "RCDT",
+              subfamily: "CHQB"    // Cheque
+            },
+            "NCHG": {
+              domain: "PMNT",
+              family: "MCOP",      // Miscellaneous Credit Operation
+              subfamily: "CHRG"    // Charges
+            },
+            "NSTO": {
+              domain: "PMNT",
+              family: "ICDT",
+              subfamily: "STDO"    // Standing Order
+            },
+            "NCMS": {
+              domain: "CMDT",      // Cash Management
+              family: "CMDT",
+              subfamily: "SWEP"    // Sweeping
+            }
+          }
+          
+          if (code_map.contains(swift_code)) then
+            mapping = code_map[swift_code]
+            
+            bank_tx_code = {
+              Domain: {
+                Code: mapping.domain,
+                Family: {
+                  Code: mapping.family,
+                  SubFamilyCode: mapping.subfamily
+                }
+              }
+            }
+          else
+            // No mapping - use proprietary code
+            log_warning("No ISO 20022 mapping for SWIFT code: " + swift_code)
+            
+            bank_tx_code = {
+              Proprietary: {
+                Code: swift_code,
+                Issuer: "SWIFT"
+              }
+            }
+          endif
+          
+          return bank_tx_code
+        </PseudoCode>
+      </MappingFormula>
+      
+      <Conditions>
+        <Condition priority="1">
+          <Type>CODE_MAPPING_AVAILABILITY</Type>
+          <Expression>swift_code in mapping_table OR use_proprietary</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>USE_PROPRIETARY_CODE</ElseAction>
+        </Condition>
+      </Conditions>
+      
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>
+          Transaction categorization incorrect.
+          Customer's TMS may misclassify transaction.
+        </ImpactIfFails>
+        <BusinessRationale>
+          Transaction codes enable automatic categorization in treasury systems.
+          Critical for cash flow forecasting and reporting.
+        </BusinessRationale>
+        <PerformanceImpact>LOW (table lookup)</PerformanceImpact>
+        <MappingTableSize>
+          SWIFT has ~100 transaction type codes.
+          ISO 20022 has hierarchical structure: Domain → Family → Subfamily.
+          Full mapping table requires ~150 entries.
+        </MappingTableSize>
+        <MaintenanceNote>
+          Mapping table must be updated when:
+          - SWIFT introduces new codes
+          - ISO 20022 adds new categories
+          - Bank adopts custom codes
+        </MaintenanceNote>
+      </General>
+    </Mapping>
+    
+    <!-- Mapping 10: Available Balance -->
+    <Mapping id="MAPPING_10">
+      <SourceField ref="FIELD_08"/>
+      <TargetField ref="FIELD_10"/>
+      
+      <MappingFormula>
+        <Type>COMPOSITE_FIELD_DECOMPOSITION</Type>
+        <Expression>
+          // Same parsing logic as opening/closing balance
+          IF source.field_64 != null THEN
+            field_64 = source.field_64
+            
+            dc_indicator = substring(field_64, 1, 1)
+            date_yymmdd = substring(field_64, 2, 6)
+            currency = substring(field_64, 8, 3)
+            amount_str = substring(field_64, 11)
+            
+            target.Bal = {
+              Tp: { CdOrPrtry: { Cd: "CLAV" } },  // Closing Available
+              Amt: parse_amount_with_currency(amount_str, currency),
+              CdtDbtInd: (dc_indicator == 'C') ? "CRDT" : "DBIT",
+              Dt: { Dt: convert_date(date_yymmdd) }
+            }
+          ENDIF
+        </Expression>
+        <PseudoCode>
+          // Field 64 is optional - closing available balance
+          // Format identical to fields 60F/62F
+          
+          if (source.field_64 != null) then
+            // Parse same way as opening/closing balance
+            field_64 = source.field_64
+            // ... (same parsing logic as Mapping 5/6)
+            
+            available_balance = {
+              Type: { CodeOrProprietary: { Code: "CLAV" } },
+              Amount: { value: amount, Currency: currency },
+              CreditDebitIndicator: credit_debit_ind,
+              Date: { Date: date_iso }
+            }
+            
+            return available_balance
+          else
+            return null  // Optional field
+          endif
+        </PseudoCode>
+      </MappingFormula>
+      
+      <Conditions>
+        <Condition priority="1">
+          <Type>OPTIONAL_FIELD</Type>
+          <Expression>true</Expression>
+          <Action>PROCEED if present</Action>
+          <ElseAction>SKIP</ElseAction>
+        </Condition>
+      </Conditions>
+      
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>
+          Available balance not reported.
+          Customer cannot see funds on hold.
+        </ImpactIfFails>
+        <BusinessRationale>
+          Available balance shows funds customer can actually use.
+          Important for treasury operations and overdraft management.
+        </BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <BalanceTypes>
+          - Booked Balance (62F): Ledger balance (all posted transactions)
+          - Available Balance (64): Booked - Holds/Blocks
+          
+          Available &lt;= Booked always.
+        </BalanceTypes>
+      </General>
+    </Mapping>
+    
+  </FieldMappings>
+  
+  <!-- ============================================= -->
+  <!-- VALIDATION RULES -->
+  <!-- ============================================= -->
+  <ValidationRules>
+    <PreConversionRules>
+      <Rule id="VAL_001" type="MANDATORY_FIELDS">
+        <Description>Check mandatory MT940 fields</Description>
+        <Fields>field_20, field_25, field_28C, field_60F, field_62F</Fields>
+        <Action>REJECT if any missing</Action>
+      </Rule>
+      
+      <Rule id="VAL_002" type="BALANCE_RECONCILIATION">
+        <Description>Validate balance equation</Description>
+        <Formula>Closing Balance = Opening Balance + Sum(Credits) - Sum(Debits)</Formula>
+        <Tolerance>0.01 currency unit</Tolerance>
+        <Action>REJECT if mismatch exceeds tolerance</Action>
+      </Rule>
+      
+      <Rule id="VAL_003" type="FIELD_61_86_PAIRING">
+        <Description>Each field 61 should have corresponding field 86</Description>
+        <Action>LOG_WARNING if field 86 missing (but PROCEED)</Action>
+      </Rule>
+    </PreConversionRules>
+    
+    <PostConversionRules>
+      <Rule id="VAL_004" type="XML_SCHEMA_VALIDATION">
+        <Description>Validate generated camt.053 against XSD</Description>
+        <Schema>camt.053.001.08.xsd</Schema>
+        <Action>REJECT if schema validation fails</Action>
+      </Rule>
+      
+      <Rule id="VAL_005" type="DATA_COMPLETENESS">
+        <Description>Ensure no critical data lost</Description>
+        <Checks>
+          <Check>All field 61 entries converted to Ntry elements</Check>
+          <Check>All field 86 data preserved (structured or unstructured)</Check>
+          <Check>Balance values exact (no rounding errors)</Check>
+        </Checks>
+        <Action>LOG_WARNING if data loss detected</Action>
+      </Rule>
+    </PostConversionRules>
+  </ValidationRules>
+  
+  <!-- ============================================= -->
+  <!-- ERROR HANDLING -->
+  <!-- ============================================= -->
+  <ErrorHandling>
+    <ErrorCategories>
+      <Category name="PARSING_ERROR" severity="ERROR" action="REJECT">
+        <Description>Cannot parse MT940 field</Description>
+        <Examples>Malformed field 61, Invalid date format</Examples>
+        <RecoveryAction>Return error to sender for correction</RecoveryAction>
+      </Category>
+      
+      <Category name="BALANCE_MISMATCH" severity="CRITICAL" action="REJECT">
+        <Description>Balance reconciliation failed</Description>
+        <RecoveryAction>INVESTIGATE and REJECT statement</RecoveryAction>
+        <Notification>Alert operations team immediately</Notification>
+      </Category>
+      
+      <Category name="FIELD_86_PARSING_WARNING" severity="WARNING" action="PROCEED">
+        <Description>Field 86 parsing incomplete</Description>
+        <RecoveryAction>Use raw text as unstructured data</RecoveryAction>
+        <Impact>Loss of structured details but statement usable</Impact>
+      </Category>
+      
+      <Category name="CODE_MAPPING_MISSING" severity="WARNING" action="PROCEED">
+        <Description>No ISO 20022 mapping for SWIFT transaction code</Description>
+        <RecoveryAction>Use proprietary code</RecoveryAction>
+        <Impact>Transaction categorization may be generic</Impact>
+      </Category>
+    </ErrorCategories>
+    
+    <DataLossTracking>
+      <Purpose>Track information lost or degraded in conversion</Purpose>
+      <TrackingFields>
+        <Field name="field_86_parsing_success_rate" description="% of field 86 successfully parsed"/>
+        <Field name="unmapped_transaction_codes" description="List of codes without ISO 20022 mapping"/>
+        <Field name="truncated_fields" description="Fields truncated due to length limits"/>
+      </TrackingFields>
+      <Storage>
+        <Database table="conversion_quality_metrics" retention="1 year"/>
+      </Storage>
+    </DataLossTracking>
+  </ErrorHandling>
+  
+  <!-- ============================================= -->
+  <!-- PERFORMANCE &amp; MONITORING -->
+  <!-- ============================================= -->
+  <PerformanceMetrics>
+    <SLA>
+      <ConversionTime target="100ms" max="2000ms" percentile="95"/>
+      <SuccessRate target="99.5%" measurement="DAILY"/>
+      <Throughput target="1000 statements/second" peak="2000 statements/second"/>
+      <Field86ParsingSuccessRate target="95%"/>
+    </SLA>
+    
+    <Monitoring>
+      <Metric name="conversion_duration_ms" type="HISTOGRAM"/>
+      <Metric name="field_61_count_per_statement" type="HISTOGRAM"/>
+      <Metric name="field_86_parsing_success_rate" type="GAUGE"/>
+      <Metric name="balance_mismatch_count" type="COUNTER"/>
+      <Metric name="unmapped_transaction_codes" type="COUNTER"/>
+      
+      <Alert condition="balance_mismatch_count > 0" severity="CRITICAL"/>
+      <Alert condition="field_86_parsing_success_rate < 0.90" severity="HIGH"/>
+      <Alert condition="conversion_duration_ms > 2000" severity="WARNING"/>
+    </Monitoring>
+  </PerformanceMetrics>
+  
+  <!-- ============================================= -->
+  <!-- AUDIT &amp; COMPLIANCE -->
+  <!-- ============================================= -->
+  <AuditConfiguration>
+    <LoggingPolicy>
+      <LogLevel>INFO</LogLevel>
+      <LogFields>
+        mt940_reference, statement_number, account_id, opening_balance, closing_balance,
+        entry_count, conversion_status, field_86_parsing_success, data_loss_indicators
+      </LogFields>
+      <RetentionPeriod>7_YEARS</RetentionPeriod>
+    </LoggingPolicy>
+    
+    <ComplianceRequirements>
+      <Requirement regulation="SWIFT_Standards">
+        <Mandate>Accurate conversion of MT940 per SWIFT guidelines</Mandate>
+        <Implementation>Validate against MT940 specification</Implementation>
+      </Requirement>
+      
+      <Requirement regulation="Customer_Agreement">
+        <Mandate>No loss of transaction details</Mandate>
+        <Implementation>Preserve all field 86 information (structured or unstructured)</Implementation>
+      </Requirement>
+    </ComplianceRequirements>
+    
+    <QualityMetrics>
+      <Metric name="Balance_Accuracy" target="100%"/>
+      <Metric name="Transaction_Count_Accuracy" target="100%"/>
+      <Metric name="Field_86_Structured_Parsing" target="95%"/>
+      <Metric name="Zero_Data_Loss" target="99%"/>
+    </QualityMetrics>
+  </AuditConfiguration>
+  
+</MessageMapping>

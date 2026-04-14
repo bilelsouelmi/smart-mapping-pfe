@@ -1,0 +1,53 @@
+[
+  {
+    "PmtInf.SttlmDt": "2026-04-13",
+    "PmtInf.Purp.Cd": "SUPP",
+    "PmtInf.Dbtr.Nm": "CREDIT AGRICOLE",
+    "CdtTrfTxInf.EndToEndId": "NEWPAY2026041301",
+    "GrpHdr.MsgId": "MSG20260413001",
+    "CdtTrfTxInf.DbtrAcct.Id.IBAN": "FR7613135003500100000001234",
+    "CdtTrfTxInf.Amt.InstdAmt": 10000,
+    "PmtInf.ChrgBr": "SHA",
+    "PmtInf.DbtrAgt.FinInstnId.BIC": "AGRIFRPPXXX",
+    "CdtTrfTxInf.RmtInf.Ustrd": "PAYMENT FOR SERVICES Q2",
+    "CdtTrfTxInf.CdtrAgt.FinInstnId.BIC": "COBADEFFXXX",
+    "CdtTrfTxInf.CdtrAcct.Id.IBAN": "DE89200400600300900100",
+    "PmtInf.DbtrAcct.Ccy": "EUR",
+    "PmtInf.ReqdExctnDt": "2026-04-13",
+    "CdtTrfTxInf.Cdtr.Nm": "COMMERZBANK AG"
+  },
+  {
+    "PmtInf.SttlmDt": "2026-04-13",
+    "PmtInf.Purp.Cd": "SALA",
+    "PmtInf.Dbtr.Nm": "WELLS FARGO",
+    "CdtTrfTxInf.EndToEndId": "NEWPAY2026041302",
+    "GrpHdr.MsgId": "MSG20260413002",
+    "CdtTrfTxInf.DbtrAcct.Id.IBAN": "US12345678901234567890",
+    "CdtTrfTxInf.Amt.InstdAmt": 50000,
+    "PmtInf.ChrgBr": "OUR",
+    "PmtInf.DbtrAgt.FinInstnId.BIC": "WFBIUS6SXXX",
+    "CdtTrfTxInf.RmtInf.Ustrd": "SALARY MARCH 2026",
+    "CdtTrfTxInf.CdtrAgt.FinInstnId.BIC": "CITIUS33XXX",
+    "CdtTrfTxInf.CdtrAcct.Id.IBAN": "US98765432109876543210",
+    "PmtInf.DbtrAcct.Ccy": "USD",
+    "PmtInf.ReqdExctnDt": "2026-04-13",
+    "CdtTrfTxInf.Cdtr.Nm": "CITIBANK NA"
+  },
+  {
+    "PmtInf.SttlmDt": "2026-04-14",
+    "PmtInf.Purp.Cd": "TRAD",
+    "PmtInf.Dbtr.Nm": "STANDARD CHARTERED",
+    "CdtTrfTxInf.EndToEndId": "NEWPAY2026041303",
+    "GrpHdr.MsgId": "MSG20260413003",
+    "CdtTrfTxInf.DbtrAcct.Id.IBAN": "GB29SCBL60161331926819",
+    "CdtTrfTxInf.Amt.InstdAmt": 25000,
+    "PmtInf.ChrgBr": "SHA",
+    "PmtInf.DbtrAgt.FinInstnId.BIC": "SCBLGB2LXXX",
+    "CdtTrfTxInf.RmtInf.Ustrd": "TRADE FINANCE INV-2026-100",
+    "CdtTrfTxInf.CdtrAgt.FinInstnId.BIC": "NWBKGB2LXXX",
+    "CdtTrfTxInf.CdtrAcct.Id.IBAN": "GB29NWBK60161331926820",
+    "PmtInf.DbtrAcct.Ccy": "GBP",
+    "PmtInf.ReqdExctnDt": "2026-04-14",
+    "CdtTrfTxInf.Cdtr.Nm": "NATWEST BANK"
+  }
+]

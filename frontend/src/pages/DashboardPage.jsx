@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import Layout from '../components/Layout';
 import Card from '../components/Card';
 import axios from 'axios';
-import { FileText, GitBranch, Sparkles, TrendingUp, Upload, Link2, FileOutput, Zap } from 'lucide-react';
+import { FileText, GitBranch, Sparkles, TrendingUp, Upload, Link2, FileOutput, Zap, CheckCircle } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 const DashboardPage = () => {
@@ -14,11 +14,11 @@ const DashboardPage = () => {
   const [stats, setStats] = useState({
     messageDescriptions: 0,
     mappingFormulas: 0,
-    outputs: 0
+    outputs: 0,
+    jobs: 0
   });
   const [loading, setLoading] = useState(true);
 
-  // Mock data for chart
   const chartData = [
     { name: 'Mon', files: 4 },
     { name: 'Tue', files: 7 },
@@ -35,16 +35,18 @@ const DashboardPage = () => {
 
   const loadStats = async () => {
     try {
-      const [msgDesc, mappings, outputs] = await Promise.all([
+      const [msgDesc, mappings, outputs, jobs] = await Promise.all([
         axios.get('http://localhost:8000/api/message-descriptions/'),
         axios.get('http://localhost:8000/api/mapping-formulas/'),
-        axios.get('http://localhost:8000/api/transform/outputs')
+        axios.get('http://localhost:8000/api/transform/outputs'),
+        axios.get('http://localhost:8000/api/transform/jobs')
       ]);
 
       setStats({
         messageDescriptions: msgDesc.data.length,
         mappingFormulas: mappings.data.length,
-        outputs: outputs.data.total_outputs
+        outputs: outputs.data.total_outputs,
+        jobs: jobs.data.total || 0
       });
     } catch (error) {
       console.error('Failed to load stats:', error);
@@ -56,7 +58,6 @@ const DashboardPage = () => {
   return (
     <Layout>
       <div>
-        {/* Welcome Header */}
         <motion.div
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -81,7 +82,7 @@ const DashboardPage = () => {
         {/* Stats Cards */}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
           gap: '1.5rem',
           marginBottom: '2rem'
         }}>
@@ -108,6 +109,14 @@ const DashboardPage = () => {
             change="+24%"
             color="#48bb78"
             delay={0.2}
+          />
+          <StatCard
+            icon={<CheckCircle size={32} />}
+            title="Transformation Jobs"
+            value={loading ? '...' : stats.jobs}
+            change="+5%"
+            color="#f59e0b"
+            delay={0.3}
           />
         </div>
 
@@ -167,8 +176,8 @@ const DashboardPage = () => {
             />
             <ActionButton
               icon={<FileOutput size={28} />}
-              title="View Outputs"
-              description="Browse generated files"
+              title="Transform & Validate"
+              description="Run jobs and view validation reports"
               onClick={() => navigate('/outputs')}
               gradient="linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)"
             />
@@ -198,7 +207,6 @@ const StatCard = ({ icon, title, value, change, color, delay }) => (
       overflow: 'hidden'
     }}
   >
-    {/* Glow effect */}
     <div style={{
       position: 'absolute',
       top: '-50%',
@@ -206,28 +214,13 @@ const StatCard = ({ icon, title, value, change, color, delay }) => (
       width: '200px',
       height: '200px',
       background: `radial-gradient(circle, ${color}30 0%, transparent 70%)`,
-      animation: 'float 6s ease-in-out infinite'
     }} />
-
     <div style={{ position: 'relative', zIndex: 1 }}>
-      <div style={{ color, marginBottom: '1rem', opacity: 0.9 }}>
-        {icon}
-      </div>
-      <div style={{
-        fontSize: '2.5rem',
-        fontWeight: '800',
-        color: 'white',
-        marginBottom: '0.5rem',
-        letterSpacing: '-1px'
-      }}>
+      <div style={{ color, marginBottom: '1rem', opacity: 0.9 }}>{icon}</div>
+      <div style={{ fontSize: '2.5rem', fontWeight: '800', color: 'white', marginBottom: '0.5rem', letterSpacing: '-1px' }}>
         {value}
       </div>
-      <div style={{
-        color: '#a0a0a0',
-        fontSize: '0.95rem',
-        marginBottom: '0.5rem',
-        fontWeight: '500'
-      }}>
+      <div style={{ color: '#a0a0a0', fontSize: '0.95rem', marginBottom: '0.5rem', fontWeight: '500' }}>
         {title}
       </div>
       <div style={{
@@ -265,37 +258,21 @@ const ActionButton = ({ icon, title, description, onClick, gradient }) => (
     }}
   >
     <div style={{ position: 'relative', zIndex: 1 }}>
-      <div style={{ marginBottom: '1rem', opacity: 0.9 }}>
-        {icon}
-      </div>
-      <div style={{
-        fontWeight: '700',
-        fontSize: '1.2rem',
-        marginBottom: '0.5rem',
-        letterSpacing: '-0.3px'
-      }}>
+      <div style={{ marginBottom: '1rem', opacity: 0.9 }}>{icon}</div>
+      <div style={{ fontWeight: '700', fontSize: '1.2rem', marginBottom: '0.5rem', letterSpacing: '-0.3px' }}>
         {title}
       </div>
-      <div style={{
-        fontSize: '0.9rem',
-        opacity: 0.9,
-        lineHeight: '1.5'
-      }}>
+      <div style={{ fontSize: '0.9rem', opacity: 0.9, lineHeight: '1.5' }}>
         {description}
       </div>
     </div>
-
-    {/* Shine effect */}
     <motion.div
       initial={{ x: '-100%' }}
       whileHover={{ x: '100%' }}
       transition={{ duration: 0.5 }}
       style={{
         position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
+        top: 0, left: 0, right: 0, bottom: 0,
         background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent)',
         pointerEvents: 'none'
       }}

@@ -23,6 +23,7 @@ class StandardElement(Base):
     
     # Type et format
     data_type = Column(String(50), nullable=False)  # string, integer, decimal, date, boolean
+    structure_type = Column(String(20), default="simple")  # simple, map, hmap, array, object  ← AJOUTEZ CETTE LIGNE
     format_pattern = Column(String(200), nullable=True)  # Ex: YYYY-MM-DD, +XXX XXXXXXXX
     
     # Description et documentation

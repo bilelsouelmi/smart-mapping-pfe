@@ -22,3 +22,4 @@ class User(Base):
     message_descriptions = relationship("MessageDescription", back_populates="user", cascade="all, delete-orphan")
     file_uploads = relationship("FileUpload", back_populates="user", cascade="all, delete-orphan")
     transformation_jobs = relationship("TransformationJob", back_populates="user", cascade="all, delete-orphan")
+    ai_learning_entries = relationship("AILearning", back_populates="user")  # ← CORRIGÉ ICI

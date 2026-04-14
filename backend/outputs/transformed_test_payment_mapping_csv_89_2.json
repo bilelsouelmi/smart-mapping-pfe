@@ -1,0 +1,32 @@
+[
+  {
+    "PmtInf.DbtrAgt.FinInstnId.BIC": "SOGEFRPPXXX",
+    "GrpHdr.MsgId": "MSG20260407001",
+    "PmtInf.Dbtr.PstlAdr.PstCd": "SUPP",
+    "PmtInf.ReqdExctnDt": "2026-04-07"
+  },
+  {
+    "PmtInf.DbtrAgt.FinInstnId.BIC": "BARCGB2LXXX",
+    "GrpHdr.MsgId": "MSG20260407002",
+    "PmtInf.Dbtr.PstlAdr.PstCd": "SALA",
+    "PmtInf.ReqdExctnDt": "2026-04-07"
+  },
+  {
+    "PmtInf.DbtrAgt.FinInstnId.BIC": "SOGEFRPPXXX",
+    "GrpHdr.MsgId": "MSG20260407003",
+    "PmtInf.Dbtr.PstlAdr.PstCd": "RENT",
+    "PmtInf.ReqdExctnDt": "2026-04-08"
+  },
+  {
+    "PmtInf.DbtrAgt.FinInstnId.BIC": "HBUKGB4BXXX",
+    "GrpHdr.MsgId": "MSG20260407004",
+    "PmtInf.Dbtr.PstlAdr.PstCd": "TRAD",
+    "PmtInf.ReqdExctnDt": "2026-04-07"
+  },
+  {
+    "PmtInf.DbtrAgt.FinInstnId.BIC": "DEUTDEFFXXX",
+    "GrpHdr.MsgId": "MSG20260407005",
+    "PmtInf.Dbtr.PstlAdr.PstCd": "LOAN",
+    "PmtInf.ReqdExctnDt": "2026-04-09"
+  }
+]

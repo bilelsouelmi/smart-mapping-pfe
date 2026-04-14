@@ -17,15 +17,18 @@ class FileUpload(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    
+
     original_filename = Column(String, nullable=False)
     file_path = Column(String, nullable=False)
     file_type = Column(String, nullable=False)  # CSV, XML, JSON, Excel
     file_size = Column(BigInteger, nullable=False)  # in bytes
-    
+
     status = Column(Enum(FileUploadStatus), default=FileUploadStatus.PENDING)
     upload_date = Column(DateTime(timezone=True), server_default=func.now())
-    
+
     # Relations
     user = relationship("User", back_populates="file_uploads")
     transformation_jobs = relationship("TransformationJob", back_populates="file_upload", cascade="all, delete-orphan")
+    # ── NOUVEAU : lien vers MessageDescription ────────────────────────────────
+    message_descriptions = relationship("MessageDescription", back_populates="file_upload")
+    # ── FIN NOUVEAU ───────────────────────────────────────────────────────────

@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from pydantic import Field
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Smart Mapping Platform"
@@ -7,18 +8,30 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     
     # Database
-    DATABASE_URL: str
+    DATABASE_URL: str = Field(
+        default="postgresql://smart_mapping_user:dev_password_123@localhost:5432/smart_mapping",
+        description="Database connection URL"
+    )
     
     # Ollama Configuration
-    OLLAMA_BASE_URL: str = "http://host.docker.internal:11434"
+    OLLAMA_BASE_URL: str = Field(
+        default="http://localhost:11434",
+        description="Ollama API base URL"
+    )
     OLLAMA_MODEL: str = "llama3.2"
     
-    # ChromaDB Configuration
-    CHROMADB_HOST: str = "chromadb"
-    CHROMADB_PORT: int = 8000
+    # Qdrant Configuration
+    QDRANT_HOST: str = Field(
+        default="localhost",  
+        description="Qdrant host"
+    )
+    QDRANT_PORT: int = Field(
+        default=6333,
+        description="Qdrant port"
+    )
     
     # JWT
-    SECRET_KEY: str
+    SECRET_KEY: str = "your-secret-key-here-change-in-production"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
     

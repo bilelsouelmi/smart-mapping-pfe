@@ -4,6 +4,16 @@ from app.config import settings
 from app.database import engine, Base
 from app.api.routes import api_router
 import logging
+from app.api.routes import xml_mappings
+from app.api.routes import rag_admin
+from app.api.routes import rag
+from app.api.routes import ai_learning  # ← NOUVEAU
+
+# Force Qdrant Manager initialization at import
+from app.services.qdrant_manager import qdrant_manager as chromadb_manager
+
+# Import AI Learning model
+from app.models.ai_learning import AILearning  # ← NOUVEAU
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -14,6 +24,8 @@ app = FastAPI(
     debug=settings.DEBUG
 )
 
+app.include_router(rag.router)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
@@ -23,8 +35,12 @@ app.add_middleware(
 )
 
 Base.metadata.create_all(bind=engine)
+
 # Include API routes
 app.include_router(api_router, prefix="/api")
+app.include_router(rag_admin.router, prefix="/api")
+app.include_router(xml_mappings.router, prefix="/api")
+app.include_router(ai_learning.router, prefix="/api")  # ← NOUVEAU
 
 @app.get("/")
 async def root():
@@ -41,7 +57,7 @@ async def health_check():
         "environment": settings.ENVIRONMENT,
         "database": "connected",
         "ollama": f"{settings.OLLAMA_BASE_URL} - {settings.OLLAMA_MODEL}",
-        "chromadb": f"{settings.CHROMADB_HOST}:{settings.CHROMADB_PORT}",
+        "qdrant": f"{settings.QDRANT_HOST}:{settings.QDRANT_PORT}",
         "debug": settings.DEBUG
     }
 
@@ -49,6 +65,25 @@ async def health_check():
 async def startup_event():
     logger.info(f"Starting {settings.PROJECT_NAME} v{settings.VERSION}")
     logger.info(f"Environment: {settings.ENVIRONMENT}")
+    
+    # Force Qdrant Manager initialization
+    logger.info("🔧 Initializing Qdrant Manager...")
+    try:
+        if chromadb_manager.collection:
+            collection_info = chromadb_manager.client.get_collection(chromadb_manager.collection_name)
+            count = collection_info.points_count
+            logger.info(f"✅ Qdrant Manager ready - {count} points available")
+        else:
+            logger.warning("⚠️ Qdrant Manager collection is None - attempting to initialize...")
+            chromadb_manager.initialize_collection()
+            if chromadb_manager.collection:
+                collection_info = chromadb_manager.client.get_collection(chromadb_manager.collection_name)
+                count = collection_info.points_count
+                logger.info(f"✅ Qdrant Manager initialized - {count} points")
+            else:
+                logger.error("❌ Failed to initialize Qdrant Manager")
+    except Exception as e:
+        logger.error(f"❌ Qdrant Manager error: {e}")
     
     # Test Ollama connection
     try:
@@ -63,39 +98,38 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"⚠️  Ollama connection failed: {e}")
     
-# Test ChromaDB connection
-logger.info("🔍 Starting ChromaDB connection test...")
-
-try:
-    import requests
-    import time
+    # Test Qdrant connection
+    logger.info("🔍 Starting Qdrant connection test...")
     
-    # Essayons d'abord la racine
-    chromadb_url = f"http://{settings.CHROMADB_HOST}:{settings.CHROMADB_PORT}/"
-    logger.info(f"   Testing URL: {chromadb_url}")
-    
-    max_retries = 3
-    for i in range(max_retries):
-        try:
-            logger.info(f"   Attempt {i+1}/{max_retries}...")
-            response = requests.get(chromadb_url, timeout=5)
-            logger.info(f"   Response status: {response.status_code}")
-            
-            # ChromaDB peut répondre 200, 404, ou autre
-            # Tant qu'il répond, c'est qu'il fonctionne
-            if response.status_code in [200, 404]:
-                logger.info("✅ ChromaDB connected and responding")
-                break
-            else:
-                logger.warning(f"   Unexpected status code: {response.status_code}")
+    try:
+        import requests
+        import time
+        
+        # Test Qdrant REST API
+        qdrant_url = f"http://{settings.QDRANT_HOST}:{settings.QDRANT_PORT}/"
+        logger.info(f"   Testing URL: {qdrant_url}")
+        
+        max_retries = 3
+        for i in range(max_retries):
+            try:
+                logger.info(f"   Attempt {i+1}/{max_retries}...")
+                response = requests.get(qdrant_url, timeout=5)
+                logger.info(f"   Response status: {response.status_code}")
                 
-        except requests.exceptions.RequestException as req_err:
-            logger.warning(f"   Request failed: {req_err}")
-            if i < max_retries - 1:
-                logger.info(f"⏳ Waiting for ChromaDB... (attempt {i+1}/{max_retries})")
-                time.sleep(2)
-            else:
-                logger.warning("⚠️  ChromaDB not responding after retries")
-                
-except Exception as e:
-    logger.error(f"⚠️  ChromaDB connection failed with error: {e}")
+                # Qdrant returns 200 on root
+                if response.status_code == 200:
+                    logger.info("✅ Qdrant connected and responding")
+                    break
+                else:
+                    logger.warning(f"   Unexpected status code: {response.status_code}")
+                    
+            except requests.exceptions.RequestException as req_err:
+                logger.warning(f"   Request failed: {req_err}")
+                if i < max_retries - 1:
+                    logger.info(f"⏳ Waiting for Qdrant... (attempt {i+1}/{max_retries})")
+                    time.sleep(2)
+                else:
+                    logger.warning("⚠️  Qdrant not responding after retries")
+                    
+    except Exception as e:
+        logger.error(f"⚠️  Qdrant connection failed with error: {e}")

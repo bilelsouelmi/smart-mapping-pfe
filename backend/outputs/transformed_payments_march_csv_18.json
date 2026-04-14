@@ -1,0 +1,27 @@
+[
+  {
+    "PmtInf.Dbtr.Nm": "John Smith",
+    "CdtTrfTxInf.Cdtr.Nm": "ACME Corporation",
+    "CdtTrfTxInf.Amt.InstdAmt": 5000.0
+  },
+  {
+    "PmtInf.Dbtr.Nm": "Sarah Johnson",
+    "CdtTrfTxInf.Cdtr.Nm": "Tech Solutions Ltd",
+    "CdtTrfTxInf.Amt.InstdAmt": 12500.5
+  },
+  {
+    "PmtInf.Dbtr.Nm": "Ahmed Hassan",
+    "CdtTrfTxInf.Cdtr.Nm": "Global Traders",
+    "CdtTrfTxInf.Amt.InstdAmt": 8750.25
+  },
+  {
+    "PmtInf.Dbtr.Nm": "Maria Garcia",
+    "CdtTrfTxInf.Cdtr.Nm": "Consulting Group",
+    "CdtTrfTxInf.Amt.InstdAmt": 3200.0
+  },
+  {
+    "PmtInf.Dbtr.Nm": "Li Wei",
+    "CdtTrfTxInf.Cdtr.Nm": "Manufacturing Co",
+    "CdtTrfTxInf.Amt.InstdAmt": 15000.0
+  }
+]

@@ -1,7 +1,7 @@
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Home, Upload, Link2, FileOutput, LogOut, Sparkles } from 'lucide-react';
+import { Home, Upload, Link2, FileOutput, LogOut, Sparkles, Database, Search } from 'lucide-react';  // ← Ajouté Search
 
 const Layout = ({ children }) => {
   const { user, logout } = useAuth();
@@ -16,8 +16,10 @@ const Layout = ({ children }) => {
   const navItems = [
     { path: '/dashboard', icon: Home, label: 'Dashboard' },
     { path: '/upload', icon: Upload, label: 'Upload' },
+    { path: '/standard-elements', icon: Database, label: 'Elements' },
     { path: '/mappings', icon: Link2, label: 'Mappings' },
     { path: '/outputs', icon: FileOutput, label: 'Outputs' },
+    { path: '/rag-search', icon: Search, label: 'RAG Search' },  // ← AJOUTÉ
   ];
 
   return (

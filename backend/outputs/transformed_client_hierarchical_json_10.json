@@ -1,0 +1,25 @@
+[
+  {
+    "GrpHdr.MsgId": {
+      "Client": {
+        "Identity": {
+          "FirstName": "Jean",
+          "LastName": "Dupont",
+          "BirthDate": "1985-03-15"
+        },
+        "Contact": {
+          "Email": "jean.dupont@email.com",
+          "Phone": "+216123456"
+        },
+        "Address": {
+          "City": "Tunis",
+          "PostalCode": "1000"
+        }
+      },
+      "Account": {
+        "Number": "TN123456789",
+        "Type": "CHECKING"
+      }
+    }
+  }
+]

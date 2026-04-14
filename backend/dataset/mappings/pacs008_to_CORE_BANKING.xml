@@ -1,0 +1,1205 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MessageMapping version="1.0">
+
+  <!-- ============================================= -->
+  <!-- GENERAL INFORMATION -->
+  <!-- ============================================= -->
+  <GeneralInformation>
+    <MappingId>MAP_PACS008_CORE_001</MappingId>
+    <MappingName>pacs.008 to Core Banking System Conversion</MappingName>
+    <Version>2.0.0</Version>
+    <CreatedDate>2026-02-03</CreatedDate>
+    <CreatedBy>Bilel SOUELMI - Vermeg FinTech Team</CreatedBy>
+    <LastModifiedDate>2026-02-03</LastModifiedDate>
+    <Status>ACTIVE</Status>
+
+    <BusinessContext>
+      <Description>
+        Converts ISO 20022 pacs.008.001.08 (FIToFICustomerCreditTransfer) messages into
+        Core Banking System transactions for account posting. This is the final step in the
+        payment processing chain where the payment instruction is translated into actual
+        debit/credit entries in customer and internal bank accounts.
+        pacs.008 represents interbank credit transfers. When a bank receives such a message,
+        it must credit the beneficiary customer account, update nostro/vostro accounts,
+        post to General Ledger, generate account statements, and update balances.
+        This mapping bridges the gap between the standardized ISO 20022 messaging layer
+        and proprietary Core Banking systems such as Temenos T24, Oracle FLEXCUBE,
+        Finastra Equation, Mambu, and Thought Machine Vault.
+      </Description>
+      <UseCases>
+        <UseCase>Incoming international payment - credit customer account</UseCase>
+        <UseCase>Interbank settlement - nostro account reconciliation</UseCase>
+        <UseCase>Real-time gross settlement (RTGS) posting</UseCase>
+        <UseCase>SEPA credit transfer posting</UseCase>
+        <UseCase>Cross-border remittance crediting</UseCase>
+        <UseCase>Corporate bulk payment file processing</UseCase>
+      </UseCases>
+      <ApplicableDomains>Core Banking, Account Management, General Ledger, Nostro Reconciliation, Customer Accounts, Payment Operations, Real-time Payments</ApplicableDomains>
+    </BusinessContext>
+
+    <TechnicalSpecifications>
+      <SourceFormat>ISO 20022 pacs.008.001.08 (XML)</SourceFormat>
+      <TargetFormat>Core Banking Transaction JSON/API</TargetFormat>
+      <ProcessingMode>REAL_TIME</ProcessingMode>
+      <AverageProcessingTime>250ms</AverageProcessingTime>
+      <MaxProcessingTime>3000ms</MaxProcessingTime>
+      <ThroughputCapacity>5000 transactions/second</ThroughputCapacity>
+    </TechnicalSpecifications>
+
+    <ComplianceRequirements>
+      <Regulation>Basel III - Liquidity Coverage Ratio (LCR)</Regulation>
+      <Regulation>IFRS 9 - Financial Instruments Accounting</Regulation>
+      <Regulation>Local Central Bank Reporting Requirements</Regulation>
+      <Regulation>AML Transaction Monitoring</Regulation>
+      <Regulation>GDPR - Customer Data Protection</Regulation>
+      <Regulation>Sarbanes-Oxley (SOX) - Financial Controls</Regulation>
+    </ComplianceRequirements>
+
+    <GlobalVariables>
+      <Variable name="DUPLICATE_DETECTION_WINDOW_DAYS" value="7" type="INTEGER" description="Days to look back for duplicate transaction ID detection"/>
+      <Variable name="ACCOUNT_LOCK_TIMEOUT_SECONDS" value="5" type="INTEGER" description="Maximum time to wait for row-level account lock before timeout"/>
+      <Variable name="MAX_RETRY_ATTEMPTS" value="3" type="INTEGER" description="Maximum retry attempts for transient errors (deadlock, timeout)"/>
+      <Variable name="LARGE_AMOUNT_THRESHOLD" value="10000" currency="EUR" type="DECIMAL" description="Amount triggering AML compliance review"/>
+      <Variable name="MAX_DECIMAL_PLACES" value="2" type="INTEGER" description="Maximum decimal precision for all monetary amounts"/>
+      <Variable name="MAX_BACKDATE_DAYS" value="5" type="INTEGER" description="Maximum days a settlement date can be backdated"/>
+      <Variable name="MAX_FUTURE_DAYS" value="90" type="INTEGER" description="Maximum days ahead a settlement date can be scheduled"/>
+      <Variable name="FX_RATE_CACHE_TTL_MINUTES" value="5" type="INTEGER" description="FX rate cache time-to-live in minutes"/>
+      <Variable name="NAME_MATCH_MIN_SCORE" value="0.8" type="DECIMAL" description="Minimum fuzzy name matching score to pass beneficiary verification"/>
+      <Variable name="FEE_WAIVER_SEGMENT" value="PREMIUM" type="STRING" description="Customer segment exempt from incoming wire fees"/>
+      <Variable name="GL_ASSET_RANGE_START" value="1000" type="INTEGER" description="Start of asset GL account range (nostro accounts)"/>
+      <Variable name="GL_ASSET_RANGE_END" value="1999" type="INTEGER" description="End of asset GL account range"/>
+      <Variable name="GL_LIABILITY_RANGE_START" value="2000" type="INTEGER" description="Start of liability GL account range (customer deposits)"/>
+      <Variable name="GL_LIABILITY_RANGE_END" value="2999" type="INTEGER" description="End of liability GL account range"/>
+      <Variable name="GL_REVENUE_RANGE_START" value="4000" type="INTEGER" description="Start of revenue GL account range (fees, interest)"/>
+      <Variable name="SANCTIONS_SCREENING_ENABLED" value="true" type="BOOLEAN" description="Whether real-time sanctions screening is active"/>
+      <Variable name="AML_SCREENING_ENABLED" value="true" type="BOOLEAN" description="Whether AML transaction monitoring is active"/>
+      <Variable name="AUDIT_RETENTION_YEARS" value="10" type="INTEGER" description="Audit log retention period in years (Basel III extended requirement)"/>
+      <Variable name="DB_ISOLATION_LEVEL" value="READ_COMMITTED" type="STRING" description="Database transaction isolation level for account postings"/>
+      <Variable name="PROCESSING_TIMEZONE" value="UTC" type="STRING" description="All timestamps generated in this timezone"/>
+      <Variable name="FATF_TRAVEL_RULE_THRESHOLD" value="1000" currency="EUR" type="DECIMAL" description="Amount above which FATF Travel Rule originator info is mandatory"/>
+    </GlobalVariables>
+  </GeneralInformation>
+
+  <!-- ============================================= -->
+  <!-- SOURCE MESSAGE STRUCTURE (pacs.008) -->
+  <!-- ============================================= -->
+  <SourceMessage>
+    <MessageType>pacs.008.001.08</MessageType>
+    <MessageName>FIToFICustomerCreditTransfer</MessageName>
+    <Standard>ISO 20022</Standard>
+    <Schema>pacs.008.001.08.xsd</Schema>
+    <Namespace>urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08</Namespace>
+
+    <Fields>
+
+      <Field id="FIELD_01">
+        <XPath>/Document/FIToFICstmrCdtTrf/GrpHdr/MsgId</XPath>
+        <FieldName>Message Identification</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>35</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Description>Unique message identifier</Description>
+        <ExampleValue>PACS20260203ABC123456789</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_02">
+        <XPath>/Document/FIToFICstmrCdtTrf/GrpHdr/CreDtTm</XPath>
+        <FieldName>Creation Date Time</FieldName>
+        <DataType>DATETIME</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Message creation timestamp</Description>
+        <ExampleValue>2026-02-03T14:35:22Z</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_03">
+        <XPath>/Document/FIToFICstmrCdtTrf/GrpHdr/InstgAgt/FinInstnId/BICFI</XPath>
+        <FieldName>Instructing Agent</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>11</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>BIC of instructing bank</Description>
+        <ExampleValue>SOGEFRPPXXX</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_04">
+        <XPath>/Document/FIToFICstmrCdtTrf/GrpHdr/InstdAgt/FinInstnId/BICFI</XPath>
+        <FieldName>Instructed Agent</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>11</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>BIC of instructed bank</Description>
+        <ExampleValue>DEUTDEFFXXX</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_05">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/PmtId/EndToEndId</XPath>
+        <FieldName>End to End Identification</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>35</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Description>Unique end-to-end transaction reference</Description>
+        <ExampleValue>E2E-CORP-2026-02-03-001</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_06">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/PmtId/TxId</XPath>
+        <FieldName>Transaction Identification</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>35</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Description>Unique transaction identifier used as core banking transaction key</Description>
+        <ExampleValue>TXN-20260203-ABC-001</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_07">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/IntrBkSttlmAmt</XPath>
+        <FieldName>Interbank Settlement Amount</FieldName>
+        <DataType>AMOUNT</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Amount settled between banks</Description>
+        <ExampleValue Ccy="EUR">25000.00</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_08">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/Amt/InstdAmt</XPath>
+        <FieldName>Instructed Amount</FieldName>
+        <DataType>AMOUNT</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Original instructed amount before charges - preferred over settlement amount</Description>
+        <ExampleValue Ccy="EUR">25000.00</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_09">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/IntrBkSttlmDt</XPath>
+        <FieldName>Interbank Settlement Date</FieldName>
+        <DataType>DATE</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Date of interbank settlement - becomes value date in core banking</Description>
+        <ExampleValue>2026-02-03</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_10">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/ChrgBr</XPath>
+        <FieldName>Charge Bearer</FieldName>
+        <DataType>CODE</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Who pays the charges: DEBT, CRED, SHAR, or SLEV</Description>
+        <ExampleValue>SHAR</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_11">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/Dbtr/Nm</XPath>
+        <FieldName>Debtor Name</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>140</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Description>Name of the payer (originator) - required for FATF Travel Rule</Description>
+        <ExampleValue>ACME CORPORATION</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_12">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/DbtrAcct/Id/IBAN</XPath>
+        <FieldName>Debtor Account</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>34</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>Payer account number (IBAN) - required for FATF Travel Rule above threshold</Description>
+        <ExampleValue>FR7630004000031234567890143</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_13">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/DbtrAgt/FinInstnId/BICFI</XPath>
+        <FieldName>Debtor Agent</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>11</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>Payer bank BIC - used for nostro GL account lookup</Description>
+        <ExampleValue>SOGEFRPPXXX</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_14">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/Cdtr/Nm</XPath>
+        <FieldName>Creditor Name</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>140</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Description>Name of the payee (beneficiary) - verified against account holder name</Description>
+        <ExampleValue>JOHN DOE</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_15">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/CdtrAcct/Id/IBAN</XPath>
+        <FieldName>Creditor Account</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>34</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>Payee account number (IBAN) - primary key for account lookup in core banking</Description>
+        <ExampleValue>DE89370400440532013000</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_16">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/CdtrAgt/FinInstnId/BICFI</XPath>
+        <FieldName>Creditor Agent</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>11</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>Payee bank BIC - verified to be our own institution BIC</Description>
+        <ExampleValue>DEUTDEFFXXX</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_17">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/RmtInf/Ustrd</XPath>
+        <FieldName>Remittance Information</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>140</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>Payment purpose and details shown on customer account statement</Description>
+        <ExampleValue>Invoice 2026-001 Payment</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_18">
+        <XPath>/Document/FIToFICstmrCdtTrf/CdtTrfTxInf/Purp/Cd</XPath>
+        <FieldName>Purpose Code</FieldName>
+        <DataType>CODE</DataType>
+        <MaxLength>4</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>Payment purpose category - used for regulatory reporting and fee schedule selection</Description>
+        <ExampleValue>SUPP</ExampleValue>
+      </Field>
+
+    </Fields>
+  </SourceMessage>
+
+  <!-- ============================================= -->
+  <!-- TARGET MESSAGE STRUCTURE (Core Banking) -->
+  <!-- ============================================= -->
+  <TargetMessage>
+    <MessageType>CoreBankingTransaction</MessageType>
+    <MessageName>Account Transaction and GL Posting</MessageName>
+    <Standard>Core Banking JSON/REST API</Standard>
+    <DataFormat>JSON</DataFormat>
+    <TransactionModel>Double-Entry Accounting</TransactionModel>
+
+    <Fields>
+
+      <Field id="FIELD_01">
+        <APIEndpoint>POST /api/v1/accounts/{account_id}/transactions</APIEndpoint>
+        <FieldName>transaction_id</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>35</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Description>Unique transaction ID - primary idempotency key preventing double posting</Description>
+        <ExampleValue>TXN-20260203-ABC-001</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_02">
+        <APIEndpoint>POST /api/v1/accounts/{account_id}/transactions</APIEndpoint>
+        <FieldName>account_number</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>34</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Description>Beneficiary account to credit - extracted and validated from creditor IBAN</Description>
+        <ExampleValue>DE89370400440532013000</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_03">
+        <APIEndpoint>POST /api/v1/accounts/{account_id}/transactions</APIEndpoint>
+        <FieldName>transaction_type</FieldName>
+        <DataType>CODE</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Always CREDIT for pacs.008 incoming payment</Description>
+        <ExampleValue>CREDIT</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_04">
+        <APIEndpoint>POST /api/v1/accounts/{account_id}/transactions</APIEndpoint>
+        <FieldName>amount</FieldName>
+        <DataType>DECIMAL</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Transaction amount after FX conversion if currency differs from account currency</Description>
+        <ExampleValue>25000.00</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_05">
+        <APIEndpoint>POST /api/v1/accounts/{account_id}/transactions</APIEndpoint>
+        <FieldName>value_date</FieldName>
+        <DataType>DATE</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Value date from interbank settlement date - determines interest accrual start</Description>
+        <ExampleValue>2026-02-03</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_06">
+        <APIEndpoint>POST /api/v1/accounts/{account_id}/transactions</APIEndpoint>
+        <FieldName>description</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>140</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>Transaction narrative shown on customer statement - built from remittance info</Description>
+        <ExampleValue>Invoice 2026-001 Payment</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_07">
+        <APIEndpoint>POST /api/v1/gl/entries</APIEndpoint>
+        <FieldName>gl_entries</FieldName>
+        <DataType>STRUCTURED</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Double-entry GL posting: debit nostro (asset) and credit customer deposit (liability)</Description>
+        <ExampleValue>DR Nostro 1050 / CR Customer Deposits 2100</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_08">
+        <APIEndpoint>PATCH /api/v1/accounts/{account_id}/balance</APIEndpoint>
+        <FieldName>balance_update</FieldName>
+        <DataType>STRUCTURED</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Real-time ledger and available balance update with pessimistic row-level locking</Description>
+      </Field>
+
+      <Field id="FIELD_09">
+        <APIEndpoint>POST /api/v1/fees/calculate-and-post</APIEndpoint>
+        <FieldName>fee_posting</FieldName>
+        <DataType>STRUCTURED</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Incoming wire fee calculation and debit from customer account based on segment</Description>
+      </Field>
+
+      <Field id="FIELD_10">
+        <APIEndpoint>POST /api/v1/audit/transactions</APIEndpoint>
+        <FieldName>audit_log</FieldName>
+        <DataType>STRUCTURED</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Complete audit trail for SOX, Basel III, and AML compliance</Description>
+      </Field>
+
+    </Fields>
+  </TargetMessage>
+
+  <!-- ============================================= -->
+  <!-- FIELD MAPPINGS -->
+  <!-- ============================================= -->
+  <FieldMappings>
+
+    <!-- ==================== MAPPING 01 ==================== -->
+    <Mapping id="MAPPING_01">
+      <SourceField ref="FIELD_06"/>
+      <TargetField ref="FIELD_01"/>
+
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>target.transaction_id = source.CdtTrfTxInf_PmtId_TxId</Expression>
+        <PseudoCode>
+          transaction_id = source.payment_id.transaction_id
+          if (NOT is_valid_format(transaction_id)) then
+            throw error "Invalid transaction ID format"
+          endif
+          if (exists_in_posted_transactions(transaction_id)) then
+            throw error "Duplicate transaction - already posted"
+          endif
+          if (exists_in_processing_queue(transaction_id)) then
+            throw error "Transaction already in processing - idempotency protection"
+          endif
+          return transaction_id
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.TxId != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Missing transaction ID - cannot ensure idempotency"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>DUPLICATE_CHECK</Type>
+          <Expression>NOT exists_in_posted_transactions(transaction_id, DUPLICATE_DETECTION_WINDOW_DAYS)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Duplicate transaction ID - already posted within detection window"</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>IDEMPOTENCY_CHECK</Type>
+          <Expression>NOT exists_in_processing_queue(transaction_id)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>WAIT for completion or REJECT based on processing status</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="DUPLICATE_DETECTION_WINDOW_DAYS"/>
+        <Variable ref="AUDIT_RETENTION_YEARS"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Double posting of same payment causes duplicate credit to beneficiary. Financial loss and customer confusion. Regulatory reporting duplication.</ImpactIfFails>
+        <BusinessRationale>Transaction ID is the primary idempotency key. Without it, network retries or message replay attacks cause duplicate credits. Duplicate detection window of DUPLICATE_DETECTION_WINDOW_DAYS days covers all realistic retry scenarios.</BusinessRationale>
+        <PerformanceImpact>MEDIUM (distributed cache lookup for duplicate check - Redis ~1-5ms, database fallback ~20-50ms)</PerformanceImpact>
+        <AuditRequirement>All transaction IDs logged with receipt timestamp, source message ID, and posting result. Required for SOX financial controls and payment investigation. Retained AUDIT_RETENTION_YEARS years.</AuditRequirement>
+        <ComplianceRequirement>Idempotency protection mandatory per PSD2 Article 80 strong customer authentication requirements. Duplicate prevention required per SWIFT message standards and ISO 20022 business rules.</ComplianceRequirement>
+        <DataPrivacy>Transaction ID is operational identifier. No direct PII. Not subject to GDPR special protections but retained for AUDIT_RETENTION_YEARS years for regulatory compliance.</DataPrivacy>
+        <MigrationNote>pacs.008 TxId maps directly to core banking transaction_id. This is a clean 1:1 mapping with no transformation required - only validation and duplicate checking.</MigrationNote>
+        <CachingStrategy>Posted transaction IDs cached in Redis for DUPLICATE_DETECTION_WINDOW_DAYS days for fast duplicate detection. Cache miss falls back to database query. Cache populated synchronously at posting time.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 02 ==================== -->
+    <Mapping id="MAPPING_02">
+      <SourceField ref="FIELD_15"/>
+      <TargetField ref="FIELD_02"/>
+
+      <MappingFormula>
+        <Type>EXTRACTION_WITH_VALIDATION</Type>
+        <Expression>
+          IF is_local_iban(source.CdtrAcct_Id_IBAN, our_country_code) THEN
+            account_number = extract_account_from_iban(source.CdtrAcct_Id_IBAN)
+          ELSE
+            REJECT "Beneficiary not our customer"
+          ENDIF
+          target.account_number = account_number
+        </Expression>
+        <PseudoCode>
+          iban = source.creditor_account.iban
+          if (NOT is_valid_iban(iban)) then
+            throw error "Invalid IBAN format"
+          endif
+          country_code = substring(iban, 1, 2)
+          our_bank_country = get_config("bank_country_code")
+          if (country_code != our_bank_country) then
+            throw error "Beneficiary account not held at this bank"
+          endif
+          account_number = extract_bban_from_iban(iban, country_code)
+          account = core_banking.get_account(account_number)
+          if (account is null) then
+            throw error "Account not found: " + account_number
+          endif
+          if (account.status != "ACTIVE") then
+            throw error "Account is closed or blocked"
+          endif
+          if (fuzzy_match(account.holder_name, source.creditor_name) &lt; NAME_MATCH_MIN_SCORE) then
+            flag_for_manual_review("Name mismatch score below threshold - potential fraud")
+          endif
+          return account_number
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>IBAN_VALIDATION</Type>
+          <Expression>is_valid_iban(iban) AND iban_checksum_valid(iban)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Invalid creditor IBAN"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>LOCAL_ACCOUNT_CHECK</Type>
+          <Expression>is_our_customer_account(iban)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT - route to nostro if we are intermediary</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>ACCOUNT_STATUS_CHECK</Type>
+          <Expression>account.status == "ACTIVE" AND NOT account.is_blocked</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Account inactive or blocked - cannot credit"</ElseAction>
+        </Condition>
+        <Condition priority="4">
+          <Type>NAME_MATCHING</Type>
+          <Expression>fuzzy_match(account.holder_name, source.creditor_name) >= NAME_MATCH_MIN_SCORE</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>FLAG for manual fraud review AND proceed with hold</ElseAction>
+        </Condition>
+        <Condition priority="5">
+          <Type>ACCOUNT_TYPE_CHECK</Type>
+          <Expression>account.type IN ["CURRENT", "SAVINGS", "CHECKING"]</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Invalid account type for incoming credit"</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="NAME_MATCH_MIN_SCORE"/>
+        <Variable ref="SANCTIONS_SCREENING_ENABLED"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Payment credited to wrong account - financial loss, regulatory breach, and potential fraud facilitation. Recovery requires manual reversal and customer notification.</ImpactIfFails>
+        <BusinessRationale>Beneficiary account is the destination of the payment. Wrong account = misposted payment. Name matching above NAME_MATCH_MIN_SCORE detects mule accounts and authorized push payment fraud. IBAN structure varies by country requiring country-specific parsing logic.</BusinessRationale>
+        <PerformanceImpact>HIGH (IBAN validation, account lookup, status check, name matching - total ~50-150ms including database call)</PerformanceImpact>
+        <AuditRequirement>Account lookup result, name match score, and account status logged per transaction. Name mismatch flags retained for fraud investigation. Required AUDIT_RETENTION_YEARS years per SOX and AML regulations.</AuditRequirement>
+        <ComplianceRequirement>Account status verification prevents posting to frozen accounts subject to court orders or sanctions. Name matching required per PSD2 Confirmation of Payee (CoP) Article 89. Account type restriction prevents posting to loan or deposit accounts not designed for incoming transfers.</ComplianceRequirement>
+        <DataPrivacy>Beneficiary account number and name are highly sensitive PII and financial data. Encrypted in transit and at rest. Access logged. Name match score stored for fraud investigation but account number pseudonymized in non-production logs.</DataPrivacy>
+        <MigrationNote>IBAN structure varies by country: Germany DE 22 chars (2 country + 2 check + 8 bank + 10 account), France FR 27 chars, UK GB 22 chars. Extraction logic must be country-aware. Non-SEPA accounts may arrive without IBAN requiring proprietary account lookup.</MigrationNote>
+        <CachingStrategy>Account details cached per session (not persisted) to avoid repeated database calls within same batch. Cache invalidated between batches to pick up account status changes.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 03 ==================== -->
+    <Mapping id="MAPPING_03">
+      <SourceField ref="NONE"/>
+      <TargetField ref="FIELD_03"/>
+
+      <MappingFormula>
+        <Type>STATIC_VALUE</Type>
+        <Expression>target.transaction_type = "CREDIT"</Expression>
+        <PseudoCode>
+          transaction_type = "CREDIT"
+          return transaction_type
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>ALWAYS_TRUE</Type>
+          <Expression>true</Expression>
+          <Action>SET_TO_CREDIT</Action>
+          <ElseAction>N/A - pacs.008 is always a credit transfer by definition</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable name="PACS008_DIRECTION" value="CREDIT" type="STRING" description="pacs.008 always represents incoming credit to beneficiary - static constant"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>Wrong direction posting - DEBIT instead of CREDIT. Funds removed from customer instead of added. Catastrophic financial and reputational impact.</ImpactIfFails>
+        <BusinessRationale>pacs.008 (FIToFICustomerCreditTransfer) is by ISO 20022 definition a credit to the beneficiary. This is a static invariant for this message type. Hardcoding prevents any misconfiguration risk.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (static value assignment)</PerformanceImpact>
+        <AuditRequirement>Transaction direction logged as standard field in audit record. Any deviation from CREDIT would be immediately detected by post-posting balance reconciliation.</AuditRequirement>
+        <ComplianceRequirement>Correct transaction direction is foundational to double-entry accounting integrity required by IFRS 9 and Basel III. Incorrect direction would corrupt GL entries and financial statements.</ComplianceRequirement>
+        <DataPrivacy>Transaction type is operational data. No PII. No GDPR restrictions.</DataPrivacy>
+        <MigrationNote>This is unique to the pacs.008 to Core Banking mapping. pacs.004 (payment return) would map to DEBIT. pacs.009 (financial institution credit transfer) would also map to CREDIT but to a different account type.</MigrationNote>
+        <CachingStrategy>Not applicable - static value.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 04 ==================== -->
+    <Mapping id="MAPPING_04">
+      <SourceField ref="FIELD_08"/>
+      <TargetField ref="FIELD_04"/>
+
+      <MappingFormula>
+        <Type>AMOUNT_SELECTION_WITH_FX</Type>
+        <Expression>
+          IF source.InstdAmt != null THEN
+            amount = source.InstdAmt_value
+            currency = source.InstdAmt_Ccy
+          ELSE
+            amount = source.IntrBkSttlmAmt_value
+            currency = source.IntrBkSttlmAmt_Ccy
+          ENDIF
+          account_currency = get_account_currency(account_number)
+          IF currency != account_currency THEN
+            fx_rate = get_fx_rate(currency, account_currency, value_date)
+            amount = round(amount * fx_rate, MAX_DECIMAL_PLACES)
+            currency = account_currency
+          ENDIF
+          target.amount = amount
+        </Expression>
+        <PseudoCode>
+          instd_amt = source.instructed_amount
+          if (instd_amt != null) then
+            amount = instd_amt.value
+            currency = instd_amt.currency
+          else
+            amount = source.interbank_settlement_amount.value
+            currency = source.interbank_settlement_amount.currency
+          endif
+          account = core_banking.get_account(account_number)
+          account_currency = account.currency
+          if (currency != account_currency) then
+            fx_rate = fx_service.get_rate(from: currency, to: account_currency, date: value_date, type: "MID")
+            if (fx_rate is null) then
+              throw error "FX rate not available for " + currency + "/" + account_currency
+            endif
+            converted_amount = round(amount * fx_rate, MAX_DECIMAL_PLACES)
+            core_banking.log_fx_conversion(transaction_id, amount, currency, converted_amount, account_currency, fx_rate)
+            amount = converted_amount
+            currency = account_currency
+          endif
+          if (amount &lt;= 0) then
+            throw error "Amount must be positive after FX conversion"
+          endif
+          if (amount >= LARGE_AMOUNT_THRESHOLD AND AML_SCREENING_ENABLED) then
+            aml_service.flag_for_review(transaction_id, amount, currency)
+          endif
+          return { amount: amount, currency: currency }
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>AMOUNT_SELECTION</Type>
+          <Expression>source.InstdAmt != null OR source.IntrBkSttlmAmt != null</Expression>
+          <Action>USE_InstdAmt if present, fallback to IntrBkSttlmAmt</Action>
+          <ElseAction>REJECT with error "No amount found in pacs.008 message"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>POSITIVE_AMOUNT_CHECK</Type>
+          <Expression>amount > 0</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Amount must be strictly positive"</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>FX_RATE_AVAILABILITY</Type>
+          <Expression>currency == account_currency OR fx_rate_available(currency, account_currency)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "FX rate not available - cannot convert " + currency + " to " + account_currency</ElseAction>
+        </Condition>
+        <Condition priority="4">
+          <Type>LARGE_AMOUNT_FLAG</Type>
+          <Expression>amount &lt; LARGE_AMOUNT_THRESHOLD</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>FLAG for AML compliance review - amount exceeds LARGE_AMOUNT_THRESHOLD AND PROCEED</ElseAction>
+        </Condition>
+        <Condition priority="5">
+          <Type>ACCOUNT_BALANCE_LIMIT</Type>
+          <Expression>account.ledger_balance + amount &lt;= account.maximum_balance</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Credit would exceed account maximum balance"</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="MAX_DECIMAL_PLACES"/>
+        <Variable ref="LARGE_AMOUNT_THRESHOLD"/>
+        <Variable ref="FX_RATE_CACHE_TTL_MINUTES"/>
+        <Variable ref="AML_SCREENING_ENABLED"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Wrong amount posted causes financial discrepancy. FX conversion error causes exchange rate loss/gain dispute. Both require manual reversal and potential regulatory reporting.</ImpactIfFails>
+        <BusinessRationale>Core financial value of the transaction. InstdAmt preferred over IntrBkSttlmAmt as it represents the original customer-facing amount before correspondent bank charges. FX conversion required for multi-currency accounts with rate cached FX_RATE_CACHE_TTL_MINUTES minutes for performance. AML threshold flagging mandatory for amounts above LARGE_AMOUNT_THRESHOLD.</BusinessRationale>
+        <PerformanceImpact>HIGH if FX conversion needed (external rate service call ~50-100ms). LOW for same-currency transactions (in-memory validation only). FX rate cache reduces repeated conversion latency to under 1ms.</PerformanceImpact>
+        <AuditRequirement>All FX conversions logged with original amount, currency, converted amount, rate, and rate source per SOX financial controls. AML flags logged with transaction ID and threshold context. Amount logs retained AUDIT_RETENTION_YEARS years.</AuditRequirement>
+        <ComplianceRequirement>Amounts above LARGE_AMOUNT_THRESHOLD must be flagged per EU 4th AML Directive Article 11. FX rate documentation required for audit per IFRS 9 fair value measurement rules. Amount precision limited to MAX_DECIMAL_PLACES to prevent rounding manipulation.</ComplianceRequirement>
+        <DataPrivacy>Transaction amounts combined with account data constitute sensitive financial information. Not PII per GDPR narrow definition but protected as financial confidential data with restricted access.</DataPrivacy>
+        <MigrationNote>ISO 20022 provides two amount fields: InstdAmt (customer's original amount) and IntrBkSttlmAmt (interbank settlement amount after charges). Core banking should credit InstdAmt to give customer full visibility. FX gain/loss from conversion posted to separate P&amp;L GL account per IFRS 9.</MigrationNote>
+        <CachingStrategy>FX rates cached in memory with FX_RATE_CACHE_TTL_MINUTES minute TTL. Cache refreshed from FX rate provider. Stale cache detected by TTL check. Same-currency transactions bypass cache entirely.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 05 ==================== -->
+    <Mapping id="MAPPING_05">
+      <SourceField ref="FIELD_09"/>
+      <TargetField ref="FIELD_05"/>
+
+      <MappingFormula>
+        <Type>DATE_HANDLING_WITH_BACKDATING_RULES</Type>
+        <Expression>
+          settlement_date = source.IntrBkSttlmDt
+          current_date = today()
+          IF settlement_date > current_date THEN
+            target.value_date = settlement_date
+            target.booking_date = settlement_date
+            target.status = "SCHEDULED"
+          ELSE IF settlement_date == current_date THEN
+            target.value_date = settlement_date
+            target.booking_date = current_date
+            target.status = "PENDING"
+          ELSE
+            IF days_back &lt;= MAX_BACKDATE_DAYS THEN
+              target.value_date = settlement_date
+              target.booking_date = current_date
+              target.status = "BACKDATED"
+            ELSE
+              REJECT "Backdate exceeds MAX_BACKDATE_DAYS allowed period"
+            ENDIF
+          ENDIF
+        </Expression>
+        <PseudoCode>
+          value_date = source.interbank_settlement_date
+          current_business_date = core_banking.get_business_date()
+          if (NOT is_valid_date(value_date)) then
+            throw error "Invalid settlement date format"
+          endif
+          if (NOT is_business_day(value_date)) then
+            value_date = next_business_day(value_date)
+            log_warning("Settlement date adjusted to next business day")
+          endif
+          if (value_date > current_business_date) then
+            days_forward = value_date - current_business_date
+            if (days_forward > MAX_FUTURE_DAYS) then
+              throw error "Future value date exceeds MAX_FUTURE_DAYS maximum"
+            endif
+            booking_date = value_date
+            transaction_status = "SCHEDULED"
+          else if (value_date == current_business_date) then
+            booking_date = current_business_date
+            transaction_status = "PENDING"
+          else
+            days_back = current_business_date - value_date
+            if (days_back > MAX_BACKDATE_DAYS) then
+              throw error "Backdate of " + days_back + " days exceeds MAX_BACKDATE_DAYS maximum"
+            endif
+            booking_date = current_business_date
+            transaction_status = "BACKDATED"
+            audit.log_backdated_transaction(transaction_id, value_date, booking_date, days_back)
+          endif
+          return { value_date: value_date, booking_date: booking_date, status: transaction_status }
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>DATE_VALIDATION</Type>
+          <Expression>is_valid_date(settlement_date)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Invalid settlement date"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>BUSINESS_DAY_CHECK</Type>
+          <Expression>is_business_day(settlement_date)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>ADJUST to next business day AND LOG warning</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>BACKDATE_LIMIT</Type>
+          <Expression>settlement_date >= current_date - MAX_BACKDATE_DAYS</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Excessive backdating beyond MAX_BACKDATE_DAYS days"</ElseAction>
+        </Condition>
+        <Condition priority="4">
+          <Type>FUTURE_DATE_LIMIT</Type>
+          <Expression>settlement_date &lt;= current_date + MAX_FUTURE_DAYS</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Future date exceeds MAX_FUTURE_DAYS days"</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="MAX_BACKDATE_DAYS"/>
+        <Variable ref="MAX_FUTURE_DAYS"/>
+        <Variable ref="AUDIT_RETENTION_YEARS"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>Wrong value date causes incorrect interest accrual, regulatory reporting date errors, and customer balance availability issues. Excessive backdating creates audit risk.</ImpactIfFails>
+        <BusinessRationale>Value date determines when funds earn interest and when the transaction appears in regulatory liquidity reports. MAX_BACKDATE_DAYS limit prevents date manipulation for regulatory arbitrage. Future-dated transactions scheduled for automated posting on value date.</BusinessRationale>
+        <PerformanceImpact>LOW (date arithmetic + business calendar lookup from in-memory cache)</PerformanceImpact>
+        <AuditRequirement>All backdated transactions logged with original value date, booking date, number of days backdated, and approver. Backdating events reviewed by operations team. Required for central bank reporting accuracy audit.</AuditRequirement>
+        <ComplianceRequirement>Value date accuracy required for Basel III LCR reporting where payment date determines liquidity bucket. Backdating beyond MAX_BACKDATE_DAYS may require central bank notification in some jurisdictions. Business calendar validated against SWIFT market practice for each currency.</ComplianceRequirement>
+        <DataPrivacy>Settlement date is operational data. No PII. No GDPR restrictions.</DataPrivacy>
+        <MigrationNote>ISO 20022 IntrBkSttlmDt is in YYYY-MM-DD format (already converted). No date format transformation needed unlike MT103 YYMMDD conversion. Business day validation uses local market calendar loaded per currency at startup.</MigrationNote>
+        <CachingStrategy>Business calendar cached per year and currency at startup. Holiday lists loaded from external provider. Cache refreshed annually and on ad-hoc holiday declarations.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 06 ==================== -->
+    <Mapping id="MAPPING_06">
+      <SourceField ref="FIELD_17"/>
+      <TargetField ref="FIELD_06"/>
+
+      <MappingFormula>
+        <Type>NARRATIVE_CONSTRUCTION</Type>
+        <Expression>
+          IF source.RmtInf_Ustrd != null THEN
+            description = source.RmtInf_Ustrd
+          ELSE
+            description = "Credit transfer from " + source.Dbtr_Nm
+          ENDIF
+          target.description = truncate(description, 140)
+          target.reference = source.EndToEndId
+        </Expression>
+        <PseudoCode>
+          remittance_text = source.remittance_info.unstructured
+          debtor_name = source.debtor.name
+          end_to_end_ref = source.payment_id.end_to_end_id
+          if (remittance_text != null AND remittance_text != "") then
+            description = remittance_text
+          else
+            description = "Incoming payment from " + debtor_name
+          endif
+          if (length(description) > 140) then
+            description = substring(description, 1, 137) + "..."
+          endif
+          reference = end_to_end_ref
+          return { description: description, reference: reference }
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>LENGTH_CHECK</Type>
+          <Expression>length(description) &lt;= 140</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>TRUNCATE to 140 characters AND LOG truncation event</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>CONTENT_SCREENING</Type>
+          <Expression>NOT contains_prohibited_content(description)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>SANITIZE prohibited characters AND FLAG for AML review</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable name="STATEMENT_DESCRIPTION_MAX_LENGTH" value="140" type="INTEGER" description="Maximum characters for transaction description on customer statement"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Customer statement shows unclear transaction description. Manual reconciliation required. Corporate ERP invoice matching fails. Customer service calls increase.</ImpactIfFails>
+        <BusinessRationale>Transaction description is the primary customer-facing text shown in online banking and statements. Rich remittance information enables automated invoice matching in corporate ERP systems reducing reconciliation effort by 60-80% for high-volume customers.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (string manipulation only, no external calls)</PerformanceImpact>
+        <AuditRequirement>Transaction description logged with audit record. Prohibited content flags logged separately for AML investigation. Truncation events logged for data quality monitoring.</AuditRequirement>
+        <ComplianceRequirement>Transaction narrative content screened for AML indicators (weapon keywords, sanctions-related terms) per bank AML policy. Prohibited character sanitization prevents XSS injection in online banking display.</ComplianceRequirement>
+        <DataPrivacy>Remittance text may contain PII (invoice to John Doe, personal reference numbers). Treated with same protections as name fields - encrypted in statement storage, access logged.</DataPrivacy>
+        <MigrationNote>ISO 20022 provides richer remittance options than MT103 field 70. Unstructured (Ustrd) maps directly to statement description. Structured (Strd) with ISO 11649 creditor references could enable more precise automated matching but requires additional parsing logic not yet implemented.</MigrationNote>
+        <CachingStrategy>No caching - pure string transformation per transaction.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 07 ==================== -->
+    <Mapping id="MAPPING_07">
+      <SourceField ref="FIELD_11"/>
+      <TargetField ref="FIELD_01"/>
+
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>
+          target.originator_name = source.Dbtr_Nm
+          target.originator_account = source.DbtrAcct_Id_IBAN
+        </Expression>
+        <PseudoCode>
+          originator_name = source.debtor.name
+          originator_account = source.debtor_account.iban
+          if (originator_name is null) then
+            originator_name = "UNKNOWN"
+            if (transaction_amount >= FATF_TRAVEL_RULE_THRESHOLD) then
+              log_warning("Originator name missing for transaction above FATF threshold - compliance risk")
+            endif
+          endif
+          return { originator_name: originator_name, originator_account: originator_account }
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>originator_name != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>SET_TO_UNKNOWN AND LOG FATF Travel Rule compliance warning</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>FATF_THRESHOLD_CHECK</Type>
+          <Expression>transaction_amount &lt; FATF_TRAVEL_RULE_THRESHOLD OR originator_name != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Originator name required for amounts above FATF_TRAVEL_RULE_THRESHOLD"</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="FATF_TRAVEL_RULE_THRESHOLD"/>
+        <Variable ref="AUDIT_RETENTION_YEARS"/>
+        <Variable ref="SANCTIONS_SCREENING_ENABLED"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>FATF Travel Rule violation for transactions above FATF_TRAVEL_RULE_THRESHOLD. Potential regulatory fine. AML monitoring incomplete without originator information.</ImpactIfFails>
+        <BusinessRationale>FATF Recommendation 16 (Travel Rule) requires originator name and account to accompany wire transfers above FATF_TRAVEL_RULE_THRESHOLD. Must be stored with transaction in core banking for AML monitoring, investigation, and regulatory reporting.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (direct field copy with threshold check)</PerformanceImpact>
+        <AuditRequirement>Originator name and account stored permanently with transaction. FATF Travel Rule compliance status logged per transaction. Missing originator flags reviewed by AML team. Retained AUDIT_RETENTION_YEARS years minimum.</AuditRequirement>
+        <ComplianceRequirement>FATF Recommendation 16 Travel Rule: originator name and account mandatory for transfers above FATF_TRAVEL_RULE_THRESHOLD. EU Wire Transfer Regulation 2015/847 implements this requirement. US Bank Secrecy Act 31 CFR 1010.410 equivalent rule.</ComplianceRequirement>
+        <DataPrivacy>Originator name and account are PII and financial data under GDPR. Encrypted in storage. Access restricted to AML, compliance, and investigation teams. Retained indefinitely for AML records despite GDPR right to erasure per Article 17(3)(b) AML exemption.</DataPrivacy>
+        <MigrationNote>pacs.008 already carries structured originator information in dedicated Dbtr (debtor) and DbtrAcct elements. No parsing or extraction needed - direct copy from ISO 20022 structured fields to core banking originator fields.</MigrationNote>
+        <CachingStrategy>No caching - originator data stored per transaction, not reused across transactions.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 08 ==================== -->
+    <Mapping id="MAPPING_08">
+      <SourceField ref="FIELD_08"/>
+      <TargetField ref="FIELD_07"/>
+
+      <MappingFormula>
+        <Type>DOUBLE_ENTRY_ACCOUNTING</Type>
+        <Expression>
+          customer_gl = get_customer_gl_account(account_info.category)
+          nostro_gl = get_nostro_gl_account(correspondent_bank_bic, currency)
+          gl_entry_1 = { gl_account: nostro_gl, debit_amount: amount, credit_amount: 0 }
+          gl_entry_2 = { gl_account: customer_gl, debit_amount: 0, credit_amount: amount }
+          VERIFY sum(debits) == sum(credits)
+          target = [gl_entry_1, gl_entry_2]
+        </Expression>
+        <PseudoCode>
+          amount = transaction_amount
+          currency = transaction_currency
+          correspondent_bank = source.instructing_agent.bic
+          if (account.type == "CHECKING") then
+            customer_gl = GL_LIABILITY_RANGE_START + 100
+          else if (account.type == "SAVINGS") then
+            customer_gl = GL_LIABILITY_RANGE_START + 200
+          endif
+          nostro_gl = get_nostro_account(correspondent_bank, currency)
+          entries = []
+          entries.add({
+            entry_id: generate_uuid(),
+            transaction_id: transaction_id,
+            gl_account: nostro_gl,
+            debit_amount: amount,
+            credit_amount: 0,
+            currency: currency,
+            value_date: value_date,
+            description: "DR Nostro - Incoming pacs.008 from " + correspondent_bank
+          })
+          entries.add({
+            entry_id: generate_uuid(),
+            transaction_id: transaction_id,
+            gl_account: customer_gl,
+            debit_amount: 0,
+            credit_amount: amount,
+            currency: currency,
+            value_date: value_date,
+            description: "CR Customer " + account_number
+          })
+          if (sum(entries.debit) != sum(entries.credit)) then
+            throw error "GL entries not balanced - accounting integrity error"
+          endif
+          return entries
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>BALANCED_ENTRIES</Type>
+          <Expression>sum(debit_amounts) == sum(credit_amounts)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Unbalanced GL entries - double-entry principle violated"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>GL_ACCOUNT_VALIDATION</Type>
+          <Expression>all_gl_accounts_exist_in_chart_of_accounts()</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Invalid GL account code - not in chart of accounts"</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>GL_RANGE_VALIDATION</Type>
+          <Expression>nostro_gl IN [GL_ASSET_RANGE_START..GL_ASSET_RANGE_END] AND customer_gl IN [GL_LIABILITY_RANGE_START..GL_LIABILITY_RANGE_END]</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "GL account assigned to wrong range - accounting error"</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="GL_ASSET_RANGE_START"/>
+        <Variable ref="GL_ASSET_RANGE_END"/>
+        <Variable ref="GL_LIABILITY_RANGE_START"/>
+        <Variable ref="GL_LIABILITY_RANGE_END"/>
+        <Variable ref="GL_REVENUE_RANGE_START"/>
+        <Variable ref="AUDIT_RETENTION_YEARS"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Financial statements corrupted. SOX audit failure. Basel III regulatory reporting errors. GL imbalance detected during EOD reconciliation causing statement delays.</ImpactIfFails>
+        <BusinessRationale>Every bank transaction requires balanced double-entry GL posting per IFRS 9 and Basel III. Debit to nostro asset account (GL_ASSET_RANGE_START-GL_ASSET_RANGE_END range) represents funds received from correspondent. Credit to customer liability account (GL_LIABILITY_RANGE_START-GL_LIABILITY_RANGE_END range) represents bank obligation to customer. Balance equation always maintained.</BusinessRationale>
+        <PerformanceImpact>MEDIUM (GL account lookup from chart of accounts + balance validation - ~20-40ms including database validation)</PerformanceImpact>
+        <AuditRequirement>All GL entries logged with transaction ID, account codes, debit/credit amounts, and posting timestamp. GL balance verification logged after each posting. Required for SOX Section 302/906 financial controls and external audit. Retained AUDIT_RETENTION_YEARS years.</AuditRequirement>
+        <ComplianceRequirement>Double-entry accounting mandatory for licensed banks under Basel III Pillar 3 disclosure requirements. IFRS 9 financial instrument recognition requires accurate GL entries. SOX requires documented financial controls preventing unauthorized GL manipulation.</ComplianceRequirement>
+        <DataPrivacy>GL entries contain account numbers and amounts - financial confidential data. Not PII per GDPR but access restricted to finance, audit, and reconciliation teams. Encrypted at rest in GL database.</DataPrivacy>
+        <MigrationNote>GL account codes are institution-specific. Chart of accounts mapping (nostro per correspondent bank + currency, customer liability per account type) must be pre-configured per institution. FX conversion GL entries (P&amp;L) added as additional entries when currency conversion occurs in MAPPING_04.</MigrationNote>
+        <CachingStrategy>Chart of accounts cached in memory at startup. Nostro account mapping cached per correspondent BIC and currency. Cache refreshed when GL structure changes (typically quarterly).</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 09 ==================== -->
+    <Mapping id="MAPPING_09">
+      <SourceField ref="FIELD_08"/>
+      <TargetField ref="FIELD_08"/>
+
+      <MappingFormula>
+        <Type>REAL_TIME_BALANCE_UPDATE</Type>
+        <Expression>
+          LOCK account FOR UPDATE WITH TIMEOUT ACCOUNT_LOCK_TIMEOUT_SECONDS
+          new_ledger_balance = account.ledger_balance + credit_amount
+          new_available_balance = account.available_balance + credit_amount
+          VALIDATE new_ledger_balance >= 0 AND new_ledger_balance &lt;= account.maximum_balance
+          UPDATE account balances
+          UNLOCK account
+          PUBLISH balance_updated event
+        </Expression>
+        <PseudoCode>
+          account_number = transaction.account_number
+          credit_amount = transaction.amount
+          db.begin_transaction(isolation: DB_ISOLATION_LEVEL)
+          retry_count = 0
+          while (retry_count &lt; MAX_RETRY_ATTEMPTS) do
+            try {
+              account = db.lock_for_update("accounts", account_number, timeout: ACCOUNT_LOCK_TIMEOUT_SECONDS)
+              ledger_balance = account.ledger_balance
+              available_balance = account.available_balance
+              new_ledger_balance = ledger_balance + credit_amount
+              new_available_balance = available_balance + credit_amount
+              if (new_ledger_balance &lt; 0) then
+                throw error "Negative balance not allowed"
+              endif
+              if (new_ledger_balance > account.maximum_balance) then
+                throw error "Maximum balance exceeded"
+              endif
+              account.ledger_balance = new_ledger_balance
+              account.available_balance = new_available_balance
+              account.last_credit_date = current_date()
+              db.update(account)
+              db.commit()
+              event_bus.publish("BALANCE_UPDATED", { account_number: account_number, new_balance: new_ledger_balance })
+              alert_service.check_balance_alerts(account_number, new_ledger_balance)
+              return { success: true, new_ledger_balance: new_ledger_balance }
+            } catch (DEADLOCK or TIMEOUT) {
+              db.rollback()
+              retry_count = retry_count + 1
+              if (retry_count >= MAX_RETRY_ATTEMPTS) then
+                throw error "Balance update failed after MAX_RETRY_ATTEMPTS retries"
+              endif
+              sleep(exponential_backoff(retry_count))
+            } catch (other_error) {
+              db.rollback()
+              throw other_error
+            }
+          end while
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>BALANCE_NON_NEGATIVE</Type>
+          <Expression>account.ledger_balance + credit_amount >= 0</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Credit would result in negative balance"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>MAXIMUM_BALANCE_CHECK</Type>
+          <Expression>account.ledger_balance + credit_amount &lt;= account.maximum_balance</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Credit would exceed maximum account balance"</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>LOCK_ACQUISITION</Type>
+          <Expression>row_level_lock_acquired within ACCOUNT_LOCK_TIMEOUT_SECONDS</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>RETRY up to MAX_RETRY_ATTEMPTS times with exponential backoff then REJECT</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="ACCOUNT_LOCK_TIMEOUT_SECONDS"/>
+        <Variable ref="MAX_RETRY_ATTEMPTS"/>
+        <Variable ref="DB_ISOLATION_LEVEL"/>
+        <Variable ref="AUDIT_RETENTION_YEARS"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Balance discrepancy between GL and account record. Customer cannot access credited funds. Overdraft protection may incorrectly reject subsequent debits.</ImpactIfFails>
+        <BusinessRationale>Real-time balance update ensures customer has immediate access to credited funds. Pessimistic row-level locking (ACCOUNT_LOCK_TIMEOUT_SECONDS timeout) prevents race conditions when concurrent transactions target same account. Exponential backoff retry up to MAX_RETRY_ATTEMPTS handles transient deadlocks without operator intervention.</BusinessRationale>
+        <PerformanceImpact>HIGH (row-level database lock + update + event publish - ~30-80ms under normal contention, up to ACCOUNT_LOCK_TIMEOUT_SECONDS under high contention)</PerformanceImpact>
+        <AuditRequirement>Balance before and after logged per transaction for SOX financial controls. Balance update events published to audit stream for real-time monitoring. Lock wait times monitored for performance alerting. Retained AUDIT_RETENTION_YEARS years.</AuditRequirement>
+        <ComplianceRequirement>Real-time balance update required for PSD2 Account Information Service accuracy. Basel III LCR calculation requires accurate real-time balances. Pessimistic locking ensures ACID compliance per DB_ISOLATION_LEVEL isolation level.</ComplianceRequirement>
+        <DataPrivacy>Account balance is sensitive financial data. Not PII per GDPR narrow definition but access restricted to core banking systems, audit, and reconciliation. Balance history encrypted at rest.</DataPrivacy>
+        <MigrationNote>Balance update must be atomic with GL posting (MAPPING_08) within same database transaction to maintain GL-to-account consistency. If GL posting succeeds but balance update fails, automatic rollback of entire transaction prevents partial state.</MigrationNote>
+        <CachingStrategy>Account balances NOT cached - always read from database under lock to prevent stale reads. Balance update events published to read-model cache (CQRS pattern) for read-heavy reporting queries.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 10 ==================== -->
+    <Mapping id="MAPPING_10">
+      <SourceField ref="FIELD_10"/>
+      <TargetField ref="FIELD_09"/>
+
+      <MappingFormula>
+        <Type>FEE_CALCULATION</Type>
+        <Expression>
+          IF charge_bearer == "CRED" OR charge_bearer == "SHAR" THEN
+            fees = calculate_fees(transaction_type: "INCOMING_WIRE", amount: amount, customer_segment: account.segment)
+            IF fees.total > 0 THEN
+              target = { fee_type: "INCOMING_WIRE_FEE", fee_amount: fees.total, charge_to_account: account_number }
+            ENDIF
+          ELSE
+            target = null
+          ENDIF
+        </Expression>
+        <PseudoCode>
+          charge_bearer = source.charge_bearer
+          amount = transaction_amount
+          account = customer_account
+          fee_schedule = FEE_SCHEDULE_SERVICE.get_fees(
+            transaction_type: "INCOMING_INTERNATIONAL_WIRE",
+            customer_segment: account.customer_segment
+          )
+          if (account.customer_segment == FEE_WAIVER_SEGMENT) then
+            return null
+          endif
+          if (fee_schedule.type == "FLAT") then
+            fee_amount = fee_schedule.amount
+          else if (fee_schedule.type == "PERCENTAGE") then
+            fee_amount = max(fee_schedule.minimum, min(fee_schedule.maximum, amount * fee_schedule.percentage))
+          endif
+          if (charge_bearer == "CRED" OR charge_bearer == "SHAR") then
+            if (fee_amount > 0 AND account.available_balance >= fee_amount) then
+              fee_transaction = {
+                transaction_id: transaction_id + "_FEE",
+                fee_type: "INCOMING_WIRE",
+                fee_amount: fee_amount,
+                charge_to_account: account_number,
+                revenue_gl_account: GL_REVENUE_RANGE_START + 100
+              }
+              return fee_transaction
+            endif
+          endif
+          return null
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>CHARGE_BEARER_CHECK</Type>
+          <Expression>charge_bearer IN ["CRED", "SHAR"]</Expression>
+          <Action>CALCULATE and APPLY fee to beneficiary</Action>
+          <ElseAction>SKIP fee posting - sender pays (DEBT) or no charge</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>SEGMENT_EXEMPTION</Type>
+          <Expression>account.customer_segment != FEE_WAIVER_SEGMENT</Expression>
+          <Action>PROCEED with fee calculation</Action>
+          <ElseAction>SKIP fee - segment FEE_WAIVER_SEGMENT is exempt from incoming wire fees</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>SUFFICIENT_BALANCE</Type>
+          <Expression>account.available_balance >= fee_amount</Expression>
+          <Action>PROCEED with fee debit</Action>
+          <ElseAction>WAIVE fee to avoid overdraft AND LOG revenue exception</ElseAction>
+        </Condition>
+        <Condition priority="4">
+          <Type>FEE_SCHEDULE_EXISTENCE</Type>
+          <Expression>fee_schedule_exists_for(transaction_type, customer_segment)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>USE_DEFAULT_FEE_SCHEDULE and LOG missing configuration</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="FEE_WAIVER_SEGMENT"/>
+        <Variable ref="GL_REVENUE_RANGE_START"/>
+        <Variable ref="MAX_DECIMAL_PLACES"/>
+        <Variable ref="AUDIT_RETENTION_YEARS"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Revenue loss if fee not charged. Customer dispute if incorrect fee applied. GL revenue account not credited causing financial reporting gap.</ImpactIfFails>
+        <BusinessRationale>Incoming wire fee is primary revenue source from correspondent banking. Fee waived for FEE_WAIVER_SEGMENT segment to retain high-value relationships. Charge bearer CRED or SHAR means beneficiary pays. DEBT means sender already covered fees - no charge to our customer.</BusinessRationale>
+        <PerformanceImpact>MEDIUM (fee schedule lookup + available balance check - ~20-40ms including cache lookup)</PerformanceImpact>
+        <AuditRequirement>All fee calculations logged with schedule version, segment, calculation method, and result. Fee waivers logged with waiver reason (segment exemption or insufficient balance). Revenue GL entries auditable per SOX financial controls. Retained AUDIT_RETENTION_YEARS years.</AuditRequirement>
+        <ComplianceRequirement>Fee transparency required per PSD2 Article 45 (payment service charges disclosure). Fee schedule must be published to customers in advance. Waived fees logged to prevent regulatory accusation of undisclosed charges.</ComplianceRequirement>
+        <DataPrivacy>Fee amount linked to account number is financial data. Not PII per GDPR but restricted access. Fee revenue reports pseudonymized to remove account-level detail for analytics.</DataPrivacy>
+        <MigrationNote>pacs.008 ChrgBr element maps cleanly to fee decision logic: CRED (creditor/beneficiary pays) and SHAR (shared) both trigger fee on our customer. DEBT (debtor/sender pays all) and SLEV (follow service level) skip beneficiary fee. Fee schedule must be maintained per customer segment and transaction type in separate configuration system.</MigrationNote>
+        <CachingStrategy>Fee schedules cached per customer segment and transaction type at startup. Refreshed when pricing changes. Individual fee calculation results not cached - always computed fresh to reflect current schedule.</CachingStrategy>
+      </General>
+    </Mapping>
+
+  </FieldMappings>
+
+</MessageMapping>
