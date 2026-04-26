@@ -27,7 +27,7 @@ const OutputsPage = () => {
         axios.get('http://localhost:8000/api/message-descriptions/')
       ]);
       setOutputs(outputsResp.data.files || []);
-      setMessageDescriptions(msgDescResp.data);
+      setMessageDescriptions(msgDescResp.data.files || msgDescResp.data);
     } catch (error) {
       toast.error('Failed to load data');
     } finally {

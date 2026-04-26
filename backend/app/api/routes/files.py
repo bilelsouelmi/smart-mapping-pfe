@@ -101,7 +101,7 @@ async def analyze_file(
         
         logger.info(f"Analyzing file with AI Learning: {unique_filename}")
 
-        # ── NOUVEAU : Créer FileUpload en base ────────────────────────────────
+        # ── Créer FileUpload en base ──────────────────────────────────────────
         file_upload = FileUpload(
             user_id=current_user.id,
             original_filename=file.filename,
@@ -114,7 +114,6 @@ async def analyze_file(
         db.commit()
         db.refresh(file_upload)
         logger.info(f"FileUpload created: ID {file_upload.id}")
-        # ── FIN NOUVEAU ───────────────────────────────────────────────────────
 
         # Process file to extract structure
         file_info = file_processor.process_file(str(file_path))
@@ -122,6 +121,15 @@ async def analyze_file(
         columns = file_info['columns']
         sample_data = file_info['sample_data']
         file_type = file_info['file_type']
+
+        # ── NOUVEAU : extraire mt_info si XML_MT ──────────────────────────────
+        mt_info = file_info.get('mt_info')  # None si pas XML_MT
+        mt_type = mt_info.get('mt_type') if mt_info else None
+        iso_target = mt_info.get('iso_target') if mt_info else None
+        mt_blocks = mt_info.get('mt_blocks') if mt_info else None
+        if mt_type:
+            logger.info(f"🏦 MT detected: {mt_type} → {iso_target}, {len(mt_blocks)} blocks")
+        # ── FIN NOUVEAU ───────────────────────────────────────────────────────
         
         # Détecter la structure hiérarchique
         hierarchical_structure = None
@@ -161,6 +169,17 @@ async def analyze_file(
                     "total_paths": len(hierarchical_columns)
                 }
                 logger.info(f"Detected {len(hierarchical_columns)} hierarchical column names in {file_type}")
+
+        # ── XML_MT : hiérarchique depuis mt_blocks ────────────────────────────
+        elif file_type == 'XML_MT' and mt_blocks:
+            hierarchical_structure = {
+                "type": "mt_blocks",
+                "mt_type": mt_type,
+                "iso_target": iso_target,
+                "blocks": mt_blocks,
+                "total_paths": len(columns)
+            }
+        # ── FIN XML_MT ────────────────────────────────────────────────────────
         
         # Analyze with LLM
         logger.info("Sending file structure to LLM for analysis...")
@@ -172,10 +191,10 @@ async def analyze_file(
         
         column_structure = analysis.get('columns_analysis', [])
         
-        if hierarchical_structure and hierarchical_structure['type'] == 'flat_with_notation':
+        if hierarchical_structure and hierarchical_structure.get('type') == 'flat_with_notation':
             for col_analysis in column_structure:
                 col_name = col_analysis.get('name')
-                if '.' in col_name:
+                if col_name and '.' in col_name:
                     col_analysis['hierarchical'] = True
                     col_analysis['path'] = col_name
                     col_analysis['level'] = len(col_name.split('.'))
@@ -188,8 +207,12 @@ async def analyze_file(
             business_domain=analysis.get('business_domain'),
             column_structure=column_structure,
             sample_data=sample_data[:10],
-            # ── NOUVEAU : lier au FileUpload ──────────────────────────────────
-            file_upload_id=file_upload.id
+            file_upload_id=file_upload.id,
+            # ── NOUVEAU : MT fields ───────────────────────────────────────────
+            mt_type=mt_type,
+            iso_target=iso_target,
+            mt_blocks=mt_blocks,
+            status='draft'
             # ── FIN NOUVEAU ───────────────────────────────────────────────────
         )
         
@@ -199,10 +222,9 @@ async def analyze_file(
         
         logger.info(f"MessageDescription created: ID {message_desc.id}")
 
-        # ── NOUVEAU : Marquer FileUpload comme COMPLETED ──────────────────────
+        # Marquer FileUpload comme COMPLETED
         file_upload.status = FileUploadStatus.COMPLETED
         db.commit()
-        # ── FIN NOUVEAU ───────────────────────────────────────────────────────
         
         # === Générer suggestions avec AI Learning + Enrichissement Qdrant ===
         from app.services.ai_learning_service import ai_learning_service
@@ -212,7 +234,6 @@ async def analyze_file(
             logger.info(f"🤖 Generating AI Learning suggestions for {len(columns)} columns")
             
             for column in columns:
-                # AI Learning Service (inclut maintenant l'enrichissement Qdrant)
                 suggestion = await ai_learning_service.suggest_field_mapping(
                     field_id=column,
                     field_name=column,
@@ -221,7 +242,6 @@ async def analyze_file(
                     db=db
                 )
                 
-                # ── MODIFIÉ : Format enrichi pour le frontend ─────────────────
                 suggestions[column] = [{
                     "element_id": suggestion.get('element_id', column),
                     "element_name": suggestion.get('element_name', column),
@@ -230,8 +250,6 @@ async def analyze_file(
                     "category": "AI Suggestion",
                     "reason": f"Suggested by {suggestion.get('suggestion_source', 'AI')}",
                     "suggestion_source": suggestion.get('suggestion_source', 'ai'),
-
-                    # ── Champs enrichis depuis Qdrant ─────────────────────────
                     "audit_requirement": suggestion.get('audit_requirement'),
                     "compliance_requirement": suggestion.get('compliance_requirement'),
                     "data_privacy": suggestion.get('data_privacy'),
@@ -245,14 +263,9 @@ async def analyze_file(
                     "rag_mapping_id": suggestion.get('rag_mapping_id'),
                     "rag_mapping_name": suggestion.get('rag_mapping_name'),
                     "rag_similarity_score": suggestion.get('rag_similarity_score'),
-                    # ── Nouveau format imbriqué mapping_formula ───────────────
                     "mapping_formula": suggestion.get('mapping_formula'),
-                    # ── Web Search enrichment ─────────────────────────────────
                     "web_enrichment": suggestion.get('web_enrichment', []),
                     "web_search_performed": suggestion.get('web_search_performed', False),
-                    # ── FIN champs enrichis ───────────────────────────────────
-
-                    # Données complètes pour l'apprentissage
                     "full_suggestion": suggestion
                 }]
             
@@ -279,8 +292,11 @@ async def analyze_file(
             "updated_at": message_desc.updated_at,
             "hierarchical_structure": hierarchical_structure,
             "suggestions": suggestions,
-            # ── NOUVEAU : file_upload_id ──────────────────────────────────────
-            "file_upload_id": file_upload.id
+            "file_upload_id": file_upload.id,
+            # ── NOUVEAU : MT info dans la réponse ─────────────────────────────
+            "mt_type": mt_type,
+            "iso_target": iso_target,
+            "mt_blocks": mt_blocks
             # ── FIN NOUVEAU ───────────────────────────────────────────────────
         }
         
@@ -364,7 +380,12 @@ async def get_file(
             "column_structure": message_desc.column_structure,
             "sample_data": message_desc.sample_data,
             "created_at": message_desc.created_at,
-            "updated_at": message_desc.updated_at
+            "updated_at": message_desc.updated_at,
+            # ── NOUVEAU : MT fields ───────────────────────────────────────────
+            "mt_type": message_desc.mt_type,
+            "iso_target": message_desc.iso_target,
+            "mt_blocks": message_desc.mt_blocks
+            # ── FIN NOUVEAU ───────────────────────────────────────────────────
         }
     except HTTPException:
         raise
@@ -425,3 +446,129 @@ async def get_supported_formats():
             "xls": "Microsoft Excel (97-2003)"
         }
     }
+
+
+@router.put("/{file_id}/mt-blocks")
+async def update_mt_blocks(
+    file_id: int,
+    mt_blocks: Dict[str, Any],
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Met à jour les blocs MT d'une MessageDescription.
+    Appelé quand l'utilisateur accepte/édite/supprime des blocs.
+    """
+    try:
+        message_desc = db.query(MessageDescription).filter(
+            MessageDescription.id == file_id,
+            MessageDescription.user_id == current_user.id
+        ).first()
+
+        if not message_desc:
+            raise HTTPException(status_code=404, detail="File not found")
+
+        message_desc.mt_blocks = mt_blocks
+        message_desc.status = 'in_progress'
+        db.commit()
+        db.refresh(message_desc)
+
+        logger.info(f"MT blocks updated for MessageDescription {file_id}")
+        return {
+            "message": "MT blocks updated successfully",
+            "id": file_id,
+            "mt_blocks": mt_blocks,
+            "blocks_count": len(mt_blocks)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update MT blocks: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{file_id}/regenerate-mt")
+async def regenerate_mt_suggestions(
+    file_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Re-génère les suggestions AI pour les blocs MT après modification.
+    """
+    try:
+        message_desc = db.query(MessageDescription).filter(
+            MessageDescription.id == file_id,
+            MessageDescription.user_id == current_user.id
+        ).first()
+
+        if not message_desc:
+            raise HTTPException(status_code=404, detail="File not found")
+
+        if not message_desc.mt_blocks:
+            raise HTTPException(status_code=400, detail="No MT blocks found")
+
+        # Rebuild columns from current mt_blocks
+        columns = []
+        sample_row = {}
+        for tag, block in message_desc.mt_blocks.items():
+            if block.get('type') == 'string':
+                columns.append(tag)
+                sample_row[tag] = block.get('value')
+            elif block.get('type') == 'map':
+                for sub_name, sub_field in block.get('sub_fields', {}).items():
+                    col = f"{tag}.{sub_name}"
+                    columns.append(col)
+                    sample_row[col] = sub_field.get('value')
+
+        # Re-generate AI suggestions
+        from app.services.ai_learning_service import ai_learning_service
+        suggestions = {}
+        for column in columns:
+            suggestion = await ai_learning_service.suggest_field_mapping(
+                field_id=column,
+                field_name=column,
+                sample_data=[sample_row],
+                message_description_id=message_desc.id,
+                db=db
+            )
+            suggestions[column] = [{
+                "element_id": suggestion.get('element_id', column),
+                "element_name": suggestion.get('element_name', column),
+                "target_path": suggestion.get('target', ''),
+                "confidence": int(suggestion.get('confidence', 0.5) * 100),
+                "category": "AI Suggestion",
+                "reason": f"Suggested by {suggestion.get('suggestion_source', 'AI')}",
+                "suggestion_source": suggestion.get('suggestion_source', 'ai'),
+                "audit_requirement": suggestion.get('audit_requirement'),
+                "compliance_requirement": suggestion.get('compliance_requirement'),
+                "data_privacy": suggestion.get('data_privacy'),
+                "migration_note": suggestion.get('migration_note'),
+                "caching_strategy": suggestion.get('caching_strategy'),
+                "performance_impact": suggestion.get('performance_impact'),
+                "global_variable_refs": suggestion.get('global_variable_refs', []),
+                "has_audit_requirement": suggestion.get('has_audit_requirement', False),
+                "has_compliance_requirement": suggestion.get('has_compliance_requirement', False),
+                "has_migration_note": suggestion.get('has_migration_note', False),
+                "rag_mapping_id": suggestion.get('rag_mapping_id'),
+                "rag_mapping_name": suggestion.get('rag_mapping_name'),
+                "rag_similarity_score": suggestion.get('rag_similarity_score'),
+                "mapping_formula": suggestion.get('mapping_formula'),
+                "web_enrichment": suggestion.get('web_enrichment', []),
+                "web_search_performed": suggestion.get('web_search_performed', False),
+                "full_suggestion": suggestion
+            }]
+
+        logger.info(f"Re-generated {len(suggestions)} suggestions for MessageDescription {file_id}")
+        return {
+            "id": file_id,
+            "suggestions": suggestions,
+            "columns": columns
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to regenerate MT suggestions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

@@ -21,12 +21,6 @@ class FileProcessor:
     def detect_file_type(file_path: str) -> str:
         """
         Détecte le type de fichier basé sur l'extension
-        
-        Args:
-            file_path: Chemin du fichier
-            
-        Returns:
-            Type de fichier (CSV, XML, JSON, Excel)
         """
         extension = Path(file_path).suffix.lower().replace('.', '')
         
@@ -45,16 +39,8 @@ class FileProcessor:
     def parse_csv(file_path: str, encoding: str = 'utf-8') -> Tuple[List[str], List[Dict[str, Any]]]:
         """
         Parse un fichier CSV
-        
-        Args:
-            file_path: Chemin du fichier CSV
-            encoding: Encodage du fichier
-            
-        Returns:
-            Tuple (colonnes, données)
         """
         try:
-            # Try different encodings if utf-8 fails
             encodings = [encoding, 'utf-8', 'latin-1', 'iso-8859-1', 'cp1252']
             
             df = None
@@ -69,13 +55,8 @@ class FileProcessor:
             if df is None:
                 raise ValueError("Could not read CSV file with any supported encoding")
             
-            # Get columns
             columns = df.columns.tolist()
-            
-            # Convert to list of dicts (limit to first 100 rows for sample)
             data = df.head(100).to_dict('records')
-            
-            # Clean NaN values
             data = [{k: (None if pd.isna(v) else v) for k, v in row.items()} for row in data]
             
             logger.info(f"Parsed CSV: {len(columns)} columns, {len(data)} rows (sample)")
@@ -88,50 +69,36 @@ class FileProcessor:
     @staticmethod
     def parse_xml(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
         """
-        Parse un fichier XML
-        
-        Args:
-            file_path: Chemin du fichier XML
-            
-        Returns:
-            Tuple (colonnes, données)
+        Parse un fichier XML générique
         """
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 xml_content = f.read()
             
-            # Parse XML to dict
             data_dict = xmltodict.parse(xml_content)
-            
-            # Try to find the data array (common patterns)
             data_list = []
             
-            # Pattern 1: Root > items > item
             if isinstance(data_dict, dict):
                 root_key = list(data_dict.keys())[0]
                 root_data = data_dict[root_key]
                 
-                # Look for array-like structures
                 for key, value in root_data.items():
                     if isinstance(value, list):
                         data_list = value
                         break
                     elif isinstance(value, dict):
-                        # Single item
                         data_list = [value]
                         break
             
             if not data_list:
                 raise ValueError("Could not find data array in XML structure")
             
-            # Extract columns from first item
             if data_list:
                 first_item = data_list[0]
                 columns = list(first_item.keys()) if isinstance(first_item, dict) else []
             else:
                 columns = []
             
-            # Limit to first 100 items
             data = data_list[:100]
             
             logger.info(f"Parsed XML: {len(columns)} columns, {len(data)} rows (sample)")
@@ -145,40 +112,29 @@ class FileProcessor:
     def parse_json(file_path: str) -> Tuple[List[str], List[Dict[str, Any]]]:
         """
         Parse un fichier JSON
-        
-        Args:
-            file_path: Chemin du fichier JSON
-            
-        Returns:
-            Tuple (colonnes, données)
         """
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
-            # Handle different JSON structures
             if isinstance(data, list):
                 data_list = data
             elif isinstance(data, dict):
-                # Try to find the data array
                 for key, value in data.items():
                     if isinstance(value, list):
                         data_list = value
                         break
                 else:
-                    # Single object
                     data_list = [data]
             else:
                 raise ValueError("Unexpected JSON structure")
             
-            # Extract columns from first item
             if data_list:
                 first_item = data_list[0]
                 columns = list(first_item.keys()) if isinstance(first_item, dict) else []
             else:
                 columns = []
             
-            # Limit to first 100 items
             data_list = data_list[:100]
             
             logger.info(f"Parsed JSON: {len(columns)} columns, {len(data_list)} rows (sample)")
@@ -192,28 +148,15 @@ class FileProcessor:
     def parse_excel(file_path: str, sheet_name: Optional[str] = None) -> Tuple[List[str], List[Dict[str, Any]]]:
         """
         Parse un fichier Excel
-        
-        Args:
-            file_path: Chemin du fichier Excel
-            sheet_name: Nom de la feuille (None = première feuille)
-            
-        Returns:
-            Tuple (colonnes, données)
         """
         try:
-            # Read Excel file
             if sheet_name:
                 df = pd.read_excel(file_path, sheet_name=sheet_name)
             else:
                 df = pd.read_excel(file_path)
             
-            # Get columns
             columns = df.columns.tolist()
-            
-            # Convert to list of dicts (limit to first 100 rows)
             data = df.head(100).to_dict('records')
-            
-            # Clean NaN values
             data = [{k: (None if pd.isna(v) else v) for k, v in row.items()} for row in data]
             
             logger.info(f"Parsed Excel: {len(columns)} columns, {len(data)} rows (sample)")
@@ -222,23 +165,50 @@ class FileProcessor:
         except Exception as e:
             logger.error(f"Failed to parse Excel: {e}")
             raise ValueError(f"Excel parsing error: {str(e)}")
-    
+
+    # ── NOUVEAU : Parse XML MT SWIFT ──────────────────────────────────────────
+    @staticmethod
+    def parse_mt_xml(file_path: str) -> Tuple[List[str], List[Dict[str, Any]], Dict[str, Any]]:
+        """
+        Parse un fichier XML contenant des blocs SWIFT MT.
+        Retourne columns, sample_data, et mt_info (mt_type, iso_target, mt_blocks).
+        """
+        from app.services.mt_parser import mt_parser
+        result = mt_parser.parse(file_path)
+        return result["columns"], result["sample_data"], {
+            "mt_type": result["mt_type"],
+            "iso_target": result["iso_target"],
+            "mt_blocks": result["mt_blocks"]
+        }
+    # ── FIN NOUVEAU ────────────────────────────────────────────────────────────
+
     @classmethod
     def process_file(cls, file_path: str) -> Dict[str, Any]:
         """
-        Traite un fichier et retourne sa structure
-        
-        Args:
-            file_path: Chemin du fichier
-            
-        Returns:
-            Dictionnaire avec file_type, columns, sample_data
+        Traite un fichier et retourne sa structure.
+        Détecte automatiquement si XML est un fichier MT SWIFT.
         """
         try:
-            # Detect file type
             file_type = cls.detect_file_type(file_path)
-            
-            # Parse based on type
+
+            # ── NOUVEAU : détecter XML MT avant parse standard ─────────────────
+            if file_type == "XML":
+                try:
+                    from app.services.mt_parser import mt_parser
+                    if mt_parser.is_mt_xml(file_path):
+                        logger.info(f"🏦 MT XML detected: {file_path}")
+                        columns, data, mt_info = cls.parse_mt_xml(file_path)
+                        return {
+                            "file_type": "XML_MT",
+                            "columns": columns,
+                            "sample_data": data[:10],
+                            "total_rows": len(data),
+                            "mt_info": mt_info
+                        }
+                except Exception as e:
+                    logger.warning(f"MT detection failed, falling back to generic XML: {e}")
+            # ── FIN NOUVEAU ────────────────────────────────────────────────────
+
             if file_type == "CSV":
                 columns, data = cls.parse_csv(file_path)
             elif file_type == "XML":
@@ -253,8 +223,9 @@ class FileProcessor:
             return {
                 "file_type": file_type,
                 "columns": columns,
-                "sample_data": data[:10],  # Return only first 10 rows as sample
-                "total_rows": len(data)
+                "sample_data": data[:10],
+                "total_rows": len(data),
+                "mt_info": None
             }
             
         except Exception as e:
@@ -268,13 +239,6 @@ class FileProcessor:
     ) -> List[Dict[str, Any]]:
         """
         Applique des transformations sur les données
-        
-        Args:
-            data: Données source
-            mapping_formulas: Liste des formules de transformation
-            
-        Returns:
-            Données transformées
         """
         try:
             transformed_data = []
@@ -288,19 +252,15 @@ class FileProcessor:
                     trans_type = formula.get('transformation_type')
                     trans_rule = formula.get('transformation_rule')
                     
-                    # Get source value
                     source_value = row.get(source_col)
                     
-                    # Apply transformation based on type
                     if trans_type == 'direct':
                         new_row[target_col] = source_value
                     
                     elif trans_type == 'date_format':
-                        # Date transformation (simplified)
                         new_row[target_col] = source_value  # TODO: Implement date parsing
                     
                     elif trans_type == 'name_split':
-                        # Split full name (simplified)
                         if source_value and isinstance(source_value, str):
                             parts = source_value.split()
                             if 'first' in target_col.lower():
@@ -309,7 +269,6 @@ class FileProcessor:
                                 new_row[target_col] = ' '.join(parts[1:]) if len(parts) > 1 else None
                     
                     elif trans_type == 'concatenate':
-                        # Concatenate multiple columns (TODO: parse rule for multiple sources)
                         new_row[target_col] = source_value
                     
                     elif trans_type == 'case_conversion':
@@ -322,7 +281,6 @@ class FileProcessor:
                                 new_row[target_col] = source_value.title()
                     
                     else:
-                        # Default: direct copy
                         new_row[target_col] = source_value
                 
                 transformed_data.append(new_row)

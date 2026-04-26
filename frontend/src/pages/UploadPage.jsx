@@ -4,11 +4,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Upload, FileText, Database, TrendingUp, Sparkles, Zap } from 'lucide-react';
 import Layout from '../components/Layout';
 import SuggestionCard from '../components/SuggestionCard';
+import MTBlockReview from '../components/MTBlockReview';
 
 const UploadPage = () => {
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [analysisResult, setAnalysisResult] = useState(null);
+  const [mtBlocksConfirmed, setMtBlocksConfirmed] = useState(false);
 
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0];
@@ -45,10 +47,14 @@ const UploadPage = () => {
   const handleNewFile = () => {
     setFile(null);
     setAnalysisResult(null);
+    setMtBlocksConfirmed(false);
     const fileInput = document.getElementById('file-upload');
     if (fileInput) fileInput.value = '';
-    console.log('🔄 Reset: Ready for new upload');
   };
+
+  const isMT = analysisResult?.file_type === 'XML_MT';
+  const showMTReview = isMT && !mtBlocksConfirmed;
+  const showSuggestions = !isMT || mtBlocksConfirmed;
 
   return (
     <Layout>
@@ -228,10 +234,48 @@ const UploadPage = () => {
                     value={Object.keys(analysisResult.suggestions || {}).length}
                     color="#f56565"
                   />
+                  {/* ── NOUVEAU : MT stats ─────────────────────────────────── */}
+                  {isMT && (
+                    <>
+                      <StatsCard
+                        icon={<span style={{ fontSize: '2rem' }}>🏦</span>}
+                        label="MT Type"
+                        value={analysisResult.mt_type || 'Unknown'}
+                        color="#f59e0b"
+                      />
+                      <StatsCard
+                        icon={<span style={{ fontSize: '2rem' }}>🎯</span>}
+                        label="ISO 20022 Target"
+                        value={analysisResult.iso_target || 'Unknown'}
+                        color="#06b6d4"
+                      />
+                    </>
+                  )}
+                  {/* ── FIN NOUVEAU ─────────────────────────────────────────── */}
                 </div>
 
+                {/* ── MT Block Review ──────────────────────────────────────────── */}
+                {showMTReview && analysisResult.mt_blocks && (
+                  <MTBlockReview
+                    analysisResult={analysisResult}
+                    onConfirmed={(confirmedBlocks) => {
+                      setAnalysisResult(prev => ({ ...prev, mt_blocks: confirmedBlocks }));
+                      setMtBlocksConfirmed(true);
+                    }}
+                    onRegenerate={(newData) => {
+                      setAnalysisResult(prev => ({
+                        ...prev,
+                        suggestions: newData.suggestions,
+                        mt_blocks: prev.mt_blocks
+                      }));
+                      setMtBlocksConfirmed(true);
+                    }}
+                  />
+                )}
+                {/* ── FIN MT Block Review ───────────────────────────────────────── */}
+
                 {/* Suggestions Section */}
-                <Card>
+                {showSuggestions && <Card>
                   <div style={{
                     display: 'flex',
                     justifyContent: 'space-between',
@@ -286,7 +330,7 @@ const UploadPage = () => {
                       />
                     ))}
                   </div>
-                </Card>
+                </Card>}
               </motion.div>
             )}
           </AnimatePresence>
@@ -301,7 +345,6 @@ const UploadPage = () => {
             border-radius: 50%;
             animation: spin 0.8s linear infinite;
           }
-
           @keyframes spin {
             to { transform: rotate(360deg); }
           }
@@ -310,6 +353,92 @@ const UploadPage = () => {
     </Layout>
   );
 };
+
+// ── NOUVEAU : MT Block Card ───────────────────────────────────────────────────
+const MTBlockCard = ({ tag, block }) => (
+  <motion.div
+    whileHover={{ scale: 1.02 }}
+    style={{
+      background: 'rgba(245,158,11,0.05)',
+      border: '1px solid rgba(245,158,11,0.2)',
+      borderRadius: '12px',
+      padding: '1rem'
+    }}
+  >
+    {/* Header */}
+    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+      <span style={{
+        padding: '2px 10px',
+        background: 'rgba(245,158,11,0.2)',
+        color: '#f59e0b',
+        borderRadius: '6px',
+        fontFamily: 'monospace',
+        fontWeight: '700',
+        fontSize: '0.9rem'
+      }}>
+        {tag}
+      </span>
+      <span style={{ color: '#e2e8f0', fontSize: '0.85rem', fontWeight: '600' }}>
+        {block.name}
+      </span>
+      <span style={{
+        marginLeft: 'auto',
+        padding: '1px 6px',
+        background: block.type === 'map' ? 'rgba(6,182,212,0.2)' : 'rgba(102,126,234,0.2)',
+        color: block.type === 'map' ? '#06b6d4' : '#667eea',
+        borderRadius: '4px',
+        fontSize: '0.7rem',
+        fontWeight: '600'
+      }}>
+        {block.type}
+      </span>
+    </div>
+
+    {/* Format */}
+    <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.5rem' }}>
+      format: <span style={{ color: '#9ca3af', fontFamily: 'monospace' }}>{block.format}</span>
+    </div>
+
+    {/* Value or Sub-fields */}
+    {block.type === 'string' && block.value && (
+      <div style={{
+        padding: '4px 8px',
+        background: 'rgba(0,0,0,0.2)',
+        borderRadius: '6px',
+        fontSize: '0.8rem',
+        color: '#a5f3fc',
+        fontFamily: 'monospace'
+      }}>
+        {block.value}
+      </div>
+    )}
+
+    {block.type === 'map' && block.sub_fields && (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        {Object.entries(block.sub_fields).map(([subName, subField]) => (
+          <div key={subName} style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '3px 8px',
+            background: 'rgba(0,0,0,0.2)',
+            borderRadius: '4px',
+            fontSize: '0.75rem'
+          }}>
+            <span style={{ color: '#06b6d4', minWidth: '70px', fontFamily: 'monospace' }}>{subName}</span>
+            <span style={{ color: '#6b7280', fontSize: '0.7rem' }}>{subField.format}</span>
+            {subField.value && (
+              <span style={{ color: '#a5f3fc', fontFamily: 'monospace', marginLeft: 'auto' }}>
+                {subField.value}
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    )}
+  </motion.div>
+);
+// ── FIN NOUVEAU ───────────────────────────────────────────────────────────────
 
 // Card Component
 const Card = ({ children, style }) => (

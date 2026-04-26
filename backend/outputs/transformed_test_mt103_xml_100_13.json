@@ -1,0 +1,13 @@
+[
+  {
+    "CdtTrfTxInf.RmtInf.Ustrd": "Paiement facture",
+    "PmtInf.ChrgBr": "SHA",
+    "CdtTrfTxInf.CdtrAgt.FinInstnId.BIC": "BANKTNTR",
+    "PmtInf.DbtrAgt.FinInstnId.BIC": "BANKTNTA",
+    "CdtTrfTxInf.CdtrAcct.Id.IBAN": "TN987654321",
+    "CdtTrfTxInf.Cdtr.Nm": "Mohamed Trabelsi",
+    "PmtInf.DbtrAcct.Id.IBAN": "TN123456789",
+    "PmtInf.ReqdExctnDt": "2026-04-14",
+    "CdtTrfTxInf.EndToEndId": "REF12345"
+  }
+]

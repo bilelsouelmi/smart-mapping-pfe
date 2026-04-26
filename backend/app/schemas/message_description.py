@@ -11,7 +11,7 @@ class ColumnStructure(BaseModel):
 
 class MessageDescriptionBase(BaseModel):
     file_name: str
-    file_type: str = Field(..., pattern="^(CSV|XML|JSON|Excel)$")
+    file_type: str = Field(..., pattern="^(CSV|XML|XML_MT|JSON|Excel)$")
     source_system: Optional[str] = None
     target_system: Optional[str] = None
     business_domain: Optional[str] = None
@@ -24,7 +24,7 @@ class MessageDescriptionCreate(MessageDescriptionBase):
 
 class MessageDescriptionUpdate(BaseModel):
     file_name: Optional[str] = None
-    file_type: Optional[str] = Field(None, pattern="^(CSV|XML|JSON|Excel)$")
+    file_type: Optional[str] = Field(None, pattern="^(CSV|XML|XML_MT|JSON|Excel)$")
     source_system: Optional[str] = None
     target_system: Optional[str] = None
     business_domain: Optional[str] = None
@@ -39,6 +39,14 @@ class MessageDescriptionResponse(MessageDescriptionBase):
     sample_data: Optional[List[Dict[str, Any]]] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+    # ── NOUVEAU : MT fields ───────────────────────────────────────────────────
+    mt_type: Optional[str] = None
+    iso_target: Optional[str] = None
+    mt_blocks: Optional[Dict[str, Any]] = None
+    status: Optional[str] = None
+    mapping_completion: Optional[int] = None
+    quality_score: Optional[int] = None
+    # ── FIN NOUVEAU ───────────────────────────────────────────────────────────
 
     class Config:
         from_attributes = True
