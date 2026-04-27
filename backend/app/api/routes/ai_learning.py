@@ -3,7 +3,9 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.core.deps import get_current_user
 from app.models.user import User
-from app.services.ai_learning_service import ai_learning_service  # ✅ CORRECT!
+from app.models.message_description import MessageDescription
+from app.models.mapping_formula import MappingFormula
+from app.services.ai_learning_service import ai_learning_service
 from pydantic import BaseModel
 from typing import Optional, Dict
 import logging
@@ -22,6 +24,48 @@ class RecordDecisionRequest(BaseModel):
     mapping_formula_id: Optional[int] = None
 
 
+def _update_mapping_completion(message_description_id: int, db: Session):
+    """
+    Calcule et met à jour le % de colonnes mappées pour une MessageDescription.
+    """
+    try:
+        message_desc = db.query(MessageDescription).filter(
+            MessageDescription.id == message_description_id
+        ).first()
+
+        if not message_desc:
+            return
+
+        # Total colonnes
+        total_columns = len(message_desc.column_structure or [])
+        if total_columns == 0:
+            return
+
+        # Colonnes mappées (formulas créées avec target non vide)
+        mapped_count = db.query(MappingFormula).filter(
+            MappingFormula.message_description_id == message_description_id,
+            MappingFormula.target_path != '',
+            MappingFormula.target_path != None
+        ).count()
+
+        completion = int((mapped_count / total_columns) * 100)
+        message_desc.mapping_completion = min(completion, 100)
+
+        # Mettre à jour status
+        if completion == 0:
+            message_desc.status = 'draft'
+        elif completion < 100:
+            message_desc.status = 'in_progress'
+        else:
+            message_desc.status = 'validated'
+
+        db.commit()
+        logger.info(f"✅ Mapping completion updated: {completion}% for MD {message_description_id}")
+
+    except Exception as e:
+        logger.error(f"Failed to update mapping completion: {e}")
+
+
 @router.post("/ai-learning/record-decision")
 async def record_decision(
     request: RecordDecisionRequest,
@@ -30,17 +74,6 @@ async def record_decision(
 ):
     """
     Enregistre la décision de l'utilisateur pour apprentissage
-    
-    Body:
-        {
-            "field_id": "FIELD_03",
-            "field_tag": ":32A",
-            "suggestion": {...},
-            "user_action": "accept",  // or "edit" or "reject"
-            "final_values": {...},  // si edit
-            "message_description_id": 123,
-            "mapping_formula_id": 456
-        }
     """
     try:
         ai_learning_service.record_user_decision(
@@ -55,7 +88,7 @@ async def record_decision(
             db=db
         )
 
-        # ── NOUVEAU : Indexer dans Qdrant si edit ou accept avec mapping_formula ──
+        # ── Indexer dans Qdrant si edit ou accept avec mapping_formula ────────
         if request.user_action in ['edit', 'accept']:
             try:
                 from app.services.qdrant_manager import qdrant_manager
@@ -82,19 +115,21 @@ async def record_decision(
                     )
                     if success:
                         logger.info(f"✅ User chunk indexed in Qdrant for {request.field_id}")
-                    else:
-                        logger.warning(f"⚠️ Failed to index user chunk for {request.field_id}")
 
             except Exception as e:
                 logger.error(f"Qdrant indexing failed for {request.field_id}: {e}")
-        # ── FIN NOUVEAU ───────────────────────────────────────────────────────────
+
+        # ── NOUVEAU : Mettre à jour mapping_completion ────────────────────────
+        if request.message_description_id and request.user_action in ['accept', 'edit']:
+            _update_mapping_completion(request.message_description_id, db)
+        # ── FIN NOUVEAU ───────────────────────────────────────────────────────
 
         return {
             "message": "Decision recorded successfully",
             "action": request.user_action,
             "field_id": request.field_id
         }
-    
+
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

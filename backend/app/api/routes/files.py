@@ -336,7 +336,12 @@ async def list_files(
                     "file_name": md.file_name,
                     "file_type": md.file_type,
                     "business_domain": md.business_domain,
-                    "created_at": md.created_at
+                    "created_at": md.created_at,
+                    "status": md.status,
+                    "mapping_completion": md.mapping_completion,
+                    "quality_score": md.quality_score,
+                    "mt_type": md.mt_type,
+                    "iso_target": md.iso_target
                 }
                 for md in message_descs
             ],
@@ -344,6 +349,69 @@ async def list_files(
         }
     except Exception as e:
         logger.error(f"Error listing files: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to list files"
+        )
+
+
+@router.get("/with-formulas")
+async def list_files_with_formulas(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Liste les fichiers qui ont des MappingFormulas — dédupliqués par file_name.
+    Utilisé dans la page Outputs pour la dropdown de transformation.
+    """
+    try:
+        from app.models.mapping_formula import MappingFormula
+        from sqlalchemy import func
+
+        # Sous-requête : IDs des MessageDescriptions qui ont des formulas
+        subq = db.query(
+            MappingFormula.message_description_id,
+            func.count(MappingFormula.id).label('formula_count')
+        ).group_by(MappingFormula.message_description_id).subquery()
+
+        # Jointure avec MessageDescription
+        results = db.query(MessageDescription, subq.c.formula_count).join(
+            subq, MessageDescription.id == subq.c.message_description_id
+        ).filter(
+            MessageDescription.user_id == current_user.id
+        ).order_by(MessageDescription.id.desc()).all()
+
+        # Dédupliquer par file_name — garder le plus récent avec le plus de formulas
+        seen = {}
+        for md, formula_count in results:
+            if md.file_name not in seen:
+                seen[md.file_name] = (md, formula_count)
+
+        files = []
+        for file_name, (md, formula_count) in seen.items():
+            files.append({
+                "id": md.id,
+                "file_name": md.file_name,
+                "file_type": md.file_type,
+                "business_domain": md.business_domain,
+                "created_at": md.created_at,
+                "status": md.status,
+                "mapping_completion": md.mapping_completion,
+                "quality_score": md.quality_score,
+                "mt_type": md.mt_type,
+                "iso_target": md.iso_target,
+                "formula_count": formula_count
+            })
+
+        # Trier par file_name
+        files.sort(key=lambda x: x['file_name'])
+
+        return {
+            "files": files,
+            "total": len(files)
+        }
+    except Exception as e:
+        logger.error(f"Error listing files with formulas: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list files"

@@ -242,7 +242,23 @@ async def _run_transformation(
         job.completed_at = datetime.datetime.utcnow()
         job.error_message = None
 
-        # Store output info in job
+        # ── NOUVEAU : Mettre à jour quality_score + mapping_completion ─────────
+        quality_map = {"EXCELLENT": 100, "GOOD": 80, "ACCEPTABLE": 60, "POOR": 30}
+        quality_score = quality_map.get(validation_metrics['overall_quality'], 0)
+        message_desc.quality_score = quality_score
+        message_desc.status = 'validated'
+
+        # Calculer mapping_completion depuis les formulas
+        total_columns = len(message_desc.column_structure or [])
+        if total_columns > 0:
+            mapped_count = db.query(MappingFormula).filter(
+                MappingFormula.message_description_id == message_description_id,
+                MappingFormula.target_path != '',
+                MappingFormula.target_path != None
+            ).count()
+            message_desc.mapping_completion = min(int((mapped_count / total_columns) * 100), 100)
+        # ── FIN NOUVEAU ───────────────────────────────────────────────────────
+
         db.commit()
 
         logger.info(f"✅ TransformationJob {job_id} completed — {len(transformed_data)} rows, quality: {validation_metrics['overall_quality']}")

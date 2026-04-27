@@ -24,7 +24,7 @@ const OutputsPage = () => {
     try {
       const [outputsResp, msgDescResp] = await Promise.all([
         axios.get('http://localhost:8000/api/transform/outputs'),
-        axios.get('http://localhost:8000/api/message-descriptions/')
+        axios.get('http://localhost:8000/api/files/with-formulas')
       ]);
       setOutputs(outputsResp.data.files || []);
       setMessageDescriptions(msgDescResp.data.files || msgDescResp.data);
