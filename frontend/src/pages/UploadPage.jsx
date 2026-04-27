@@ -119,7 +119,7 @@ const UploadPage = () => {
                   onChange={handleFileChange}
                   style={{ display: 'none' }}
                   id="file-upload"
-                  accept=".csv,.json,.xml,.xlsx"
+                  accept=".csv,.json,.xml,.xlsx,.txt"
                 />
                 <label htmlFor="file-upload" style={{ cursor: 'pointer', display: 'block' }}>
                   <Upload size={64} color="#667eea" style={{ margin: '0 auto 1.5rem' }} />
@@ -127,7 +127,7 @@ const UploadPage = () => {
                     Drop your file here or click to browse
                   </h3>
                   <p style={{ color: '#a0a0a0', fontSize: '1rem' }}>
-                    Supports CSV, JSON, XML, Excel
+                    Supports CSV, JSON, XML, Excel, SWIFT TXT
                   </p>
                   {file && (
                     <motion.div

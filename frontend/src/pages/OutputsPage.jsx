@@ -441,7 +441,9 @@ const OutputsPage = () => {
                     📄
                   </div>
                   <div style={{ flex: 1 }}>
-                    <div style={{ color: 'white', fontWeight: '600', fontSize: '0.9rem' }}>{output.filename}</div>
+                    <div style={{ color: 'white', fontWeight: '600', fontSize: '0.9rem' }}>
+                      {output.filename.endsWith('.xml') ? '🏦 ' : '📄 '}{output.filename}
+                    </div>
                     <div style={{ color: '#6b7280', fontSize: '0.8rem', marginTop: '2px' }}>
                       {(output.size / 1024).toFixed(2)} KB • {new Date(output.created * 1000).toLocaleString()}
                     </div>

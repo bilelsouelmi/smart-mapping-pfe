@@ -16,6 +16,7 @@ from app.models.transformation_job import TransformationJob, JobStatus
 from app.models.validation_report import ValidationReport
 from app.models.file_upload import FileUpload
 from app.services.file_processor import FileProcessor
+from app.services.iso20022_generator import iso20022_generator
 from app.config import settings
 
 router = APIRouter()
@@ -205,11 +206,26 @@ async def _run_transformation(
         db.commit()
 
         # ── Save output file ──────────────────────────────────────────────────
-        output_filename = f"transformed_{message_desc.file_name.replace('.', '_')}_{message_description_id}_{job_id}.json"
-        output_path = OUTPUT_DIR / output_filename
+        # Generate ISO 20022 XML if MT file, else JSON
+        is_mt = message_desc.file_type == 'XML_MT' and message_desc.iso_target
 
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(transformed_data, f, indent=2, ensure_ascii=False)
+        if is_mt:
+            # Generate real ISO 20022 XML
+            xml_content = iso20022_generator.generate(
+                mapped_data=transformed_data[0] if transformed_data else {},
+                iso_target=message_desc.iso_target,
+                mt_type=message_desc.mt_type
+            )
+            output_filename = f"transformed_{message_desc.file_name.replace('.', '_')}_{message_description_id}_{job_id}.xml"
+            output_path = OUTPUT_DIR / output_filename
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(xml_content)
+            logger.info(f"✅ ISO 20022 XML generated: {output_filename}")
+        else:
+            output_filename = f"transformed_{message_desc.file_name.replace('.', '_')}_{message_description_id}_{job_id}.json"
+            output_path = OUTPUT_DIR / output_filename
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(transformed_data, f, indent=2, ensure_ascii=False)
 
         job.progress = 85.0
         db.commit()
@@ -462,7 +478,7 @@ async def list_outputs(
         output_files = []
 
         if OUTPUT_DIR.exists():
-            for file_path in OUTPUT_DIR.glob("*.json"):
+            for file_path in list(OUTPUT_DIR.glob("*.json")) + list(OUTPUT_DIR.glob("*.xml")):
                 output_files.append({
                     "filename": file_path.name,
                     "size": file_path.stat().st_size,
@@ -501,10 +517,11 @@ async def download_output(
                 detail=f"File {filename} not found"
             )
 
+        media_type = 'application/xml' if filename.endswith('.xml') else 'application/json'
         return FileResponse(
             path=str(file_path),
             filename=filename,
-            media_type='application/json'
+            media_type=media_type
         )
 
     except HTTPException:

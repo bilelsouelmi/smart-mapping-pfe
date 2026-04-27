@@ -15,7 +15,7 @@ class FileProcessor:
     Service pour traiter différents types de fichiers (CSV, XML, JSON, Excel)
     """
     
-    SUPPORTED_FORMATS = ["csv", "xml", "json", "xlsx", "xls"]
+    SUPPORTED_FORMATS = ["csv", "xml", "json", "xlsx", "xls", "txt"]
     
     @staticmethod
     def detect_file_type(file_path: str) -> str:
@@ -32,8 +32,11 @@ class FileProcessor:
             return "JSON"
         elif extension in ['xlsx', 'xls']:
             return "Excel"
+        elif extension == 'txt':
+            return "TXT"
         else:
-            raise ValueError(f"Unsupported file format: {extension}")
+            # Try to detect SWIFT TXT even without .txt extension
+            return "TXT" 
     
     @staticmethod
     def parse_csv(file_path: str, encoding: str = 'utf-8') -> Tuple[List[str], List[Dict[str, Any]]]:
@@ -182,6 +185,22 @@ class FileProcessor:
         }
     # ── FIN NOUVEAU ────────────────────────────────────────────────────────────
 
+    # ── NOUVEAU : Parse SWIFT TXT ─────────────────────────────────────────────
+    @staticmethod
+    def parse_swift_txt(file_path: str) -> Tuple[List[str], List[Dict[str, Any]], Dict[str, Any]]:
+        """
+        Parse un fichier texte SWIFT MT.
+        Retourne columns, sample_data, et mt_info.
+        """
+        from app.services.swift_txt_parser import swift_txt_parser
+        result = swift_txt_parser.parse(file_path)
+        return result["columns"], result["sample_data"], {
+            "mt_type": result["mt_type"],
+            "iso_target": result["iso_target"],
+            "mt_blocks": result["mt_blocks"]
+        }
+    # ── FIN NOUVEAU ───────────────────────────────────────────────────────────
+
     @classmethod
     def process_file(cls, file_path: str) -> Dict[str, Any]:
         """
@@ -217,6 +236,17 @@ class FileProcessor:
                 columns, data = cls.parse_json(file_path)
             elif file_type == "Excel":
                 columns, data = cls.parse_excel(file_path)
+            elif file_type == "TXT":
+                # ── SWIFT TXT format ──────────────────────────────────────────
+                columns, data, mt_info = cls.parse_swift_txt(file_path)
+                return {
+                    "file_type": "XML_MT",
+                    "columns": columns,
+                    "sample_data": data[:10],
+                    "total_rows": len(data),
+                    "mt_info": mt_info
+                }
+                # ── FIN SWIFT TXT ─────────────────────────────────────────────
             else:
                 raise ValueError(f"Unsupported file type: {file_type}")
             

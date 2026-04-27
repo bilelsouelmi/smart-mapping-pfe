@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.009.001.08">
+  <FICdtTrf>
+    <GrpHdr>
+      <MsgId>REF20260427ABC</MsgId>
+      <CreDtTm>2026-04-27T10:18:22</CreDtTm>
+      <NbOfTxs>1</NbOfTxs>
+    </GrpHdr>
+    <CdtTrfTxInf>
+      <PmtId>
+        <EndToEndId>FIT20260427001</EndToEndId>
+        <TxId>REF20260427ABC</TxId>
+      </PmtId>
+      <Amt>
+        <InstdAmt Ccy="EUR">500000.</InstdAmt>
+      </Amt>
+      <InstgAgt>
+        <FinInstnId>
+          <BICFI>BIATTNTT</BICFI>
+        </FinInstnId>
+      </InstgAgt>
+      <IntrmyAgt1>
+        <FinInstnId>
+          <BICFI>BNPAFRPP</BICFI>
+        </FinInstnId>
+      </IntrmyAgt1>
+      <CdtrAgt>
+        <FinInstnId>
+          <BICFI>DEUTDEDB</BICFI>
+        </FinInstnId>
+      </CdtrAgt>
+      <Cdtr>
+        <FinInstnId>
+          <BICFI>BARCGB22</BICFI>
+        </FinInstnId>
+      </Cdtr>
+      <InstrForCdtrAgt>
+        <InstrInf>/BNF/Cover payment for MT103 TRF20260427001</InstrInf>
+      </InstrForCdtrAgt>
+      <ReqdExctnDt>260427</ReqdExctnDt>
+    </CdtTrfTxInf>
+  </FICdtTrf>
+</Document>

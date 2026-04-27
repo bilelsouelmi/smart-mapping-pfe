@@ -41,7 +41,7 @@ async def upload_file(
     try:
         file_extension = Path(file.filename).suffix.lower().replace('.', '')
         
-        if file_extension not in FileProcessor.SUPPORTED_FORMATS:
+        if file_extension not in FileProcessor.SUPPORTED_FORMATS + ["txt"]:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unsupported file format. Supported: {', '.join(FileProcessor.SUPPORTED_FORMATS)}"
@@ -86,7 +86,7 @@ async def analyze_file(
     try:
         file_extension = Path(file.filename).suffix.lower().replace('.', '')
         
-        if file_extension not in FileProcessor.SUPPORTED_FORMATS:
+        if file_extension not in FileProcessor.SUPPORTED_FORMATS + ["txt"]:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unsupported file format. Supported: {', '.join(FileProcessor.SUPPORTED_FORMATS)}"
@@ -98,6 +98,11 @@ async def analyze_file(
         content = await file.read()
         with open(file_path, "wb") as f:
             f.write(content)
+
+        # ── TXT SWIFT → traiter comme XML_MT ──────────────────────────────────
+        if file_extension == 'txt':
+            file_extension = 'xml'  # force extension pour FileUpload
+        # ── FIN ───────────────────────────────────────────────────────────────
         
         logger.info(f"Analyzing file with AI Learning: {unique_filename}")
 
