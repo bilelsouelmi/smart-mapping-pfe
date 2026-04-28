@@ -218,6 +218,10 @@ class XMLChunker:
                     "side": "SOURCE",
                     "source_message_type": source_msg_type.lower() if source_msg_type else None,
                     "target_message_type": target_msg_type.lower() if target_msg_type else None,
+                    # ── NOUVEAU : ElementId + TargetPath depuis le XML ─────────
+                    "element_id": field.get('element_id'),
+                    "target_path": field.get('target_path'),
+                    "target_xpath": field.get('target_xpath'),
                     # ── nested mapping_formula ─────────────────────────────────
                     "mapping_formula": src_formula_obj,
                     # ── flat fields ────────────────────────────────────────────

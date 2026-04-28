@@ -1,0 +1,673 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MessageMapping version="1.0">
+
+  <!-- ============================================= -->
+  <!-- GENERAL INFORMATION -->
+  <!-- ============================================= -->
+  <GeneralInformation>
+    <MappingId>MAP_MT202_PACS009_001</MappingId>
+    <MappingName>MT202 to pacs.009 Conversion</MappingName>
+    <Version>1.0.0</Version>
+    <CreatedDate>2026-04-27</CreatedDate>
+    <CreatedBy>Bilel SOUELMI - Vermeg FinTech Team</CreatedBy>
+    <LastModifiedDate>2026-04-27</LastModifiedDate>
+    <Status>ACTIVE</Status>
+
+    <BusinessContext>
+      <Description>
+        Migration from SWIFT MT202 (Financial Institution Credit Transfer) to ISO 20022
+        pacs.009.001.08 (FinancialInstitutionCreditTransfer). MT202 is used for
+        bank-to-bank transfers, cover payments, and interbank settlements.
+        pacs.009 is its ISO 20022 equivalent with enhanced structured data.
+      </Description>
+      <UseCases>
+        <UseCase>Interbank settlement payments</UseCase>
+        <UseCase>Cover payments for MT103</UseCase>
+        <UseCase>Bank-to-bank liquidity transfers</UseCase>
+        <UseCase>Correspondent banking payments</UseCase>
+        <UseCase>Central bank settlements</UseCase>
+      </UseCases>
+    </BusinessContext>
+
+    <TechnicalSpecifications>
+      <SourceFormat>SWIFT MT202 (ISO 15022)</SourceFormat>
+      <TargetFormat>ISO 20022 pacs.009.001.08 (XML)</TargetFormat>
+      <ProcessingMode>REAL_TIME</ProcessingMode>
+    </TechnicalSpecifications>
+
+    <GlobalVariables>
+      <Variable name="MAX_MSG_ID_LENGTH" value="35" type="INTEGER" description="Maximum length of pacs.009 MsgId field"/>
+      <Variable name="MAX_REFERENCE_LENGTH" value="16" type="INTEGER" description="Maximum length of MT202 field 20"/>
+      <Variable name="AUDIT_RETENTION_YEARS" value="7" type="INTEGER" description="Regulatory minimum audit log retention period"/>
+      <Variable name="BIC_CACHE_TTL_HOURS" value="24" type="INTEGER" description="BIC directory cache time-to-live in hours"/>
+      <Variable name="SANCTIONS_SCREENING_ENABLED" value="true" type="BOOLEAN" description="Whether real-time sanctions screening is active"/>
+      <Variable name="DUPLICATE_WINDOW_DAYS" value="7" type="INTEGER" description="Lookback window for duplicate detection"/>
+    </GlobalVariables>
+  </GeneralInformation>
+
+  <!-- ============================================= -->
+  <!-- SOURCE MESSAGE STRUCTURE (MT202) -->
+  <!-- ============================================= -->
+  <SourceMessage>
+    <MessageType>MT202</MessageType>
+    <MessageName>Financial Institution Credit Transfer</MessageName>
+    <Standard>SWIFT ISO 15022</Standard>
+
+    <Fields>
+
+      <Field id="FIELD_01">
+        <FieldTag>:20:</FieldTag>
+        <FieldName>Transaction Reference Number</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>16</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Description>Unique reference assigned by the sender to identify the message</Description>
+        <ExampleValue>FIT20260427001</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_02">
+        <FieldTag>:21:</FieldTag>
+        <FieldName>Related Reference</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>16</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Description>Reference of the related message (e.g. MT103 reference for cover payments)</Description>
+        <ExampleValue>REF20260427ABC</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_03">
+        <FieldTag>:32A:</FieldTag>
+        <FieldName>Value Date, Currency Code, Amount</FieldName>
+        <DataType>COMPOSITE</DataType>
+        <Format>YYMMDD[CCY][AMOUNT]</Format>
+        <Mandatory>true</Mandatory>
+        <Components>
+          <Component name="Date" type="DATE" format="YYMMDD"/>
+          <Component name="Currency" type="STRING" format="ISO4217" length="3"/>
+          <Component name="Amount" type="DECIMAL" format="15d"/>
+        </Components>
+        <ExampleValue>260427EUR500000,</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_04">
+        <FieldTag>:52A:</FieldTag>
+        <FieldName>Ordering Institution</FieldName>
+        <DataType>BIC</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Financial institution ordering the transfer (sender bank)</Description>
+        <ExampleValue>BIATTNTT</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_05">
+        <FieldTag>:56A:</FieldTag>
+        <FieldName>Intermediary Institution</FieldName>
+        <DataType>BIC</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Intermediary bank between ordering and beneficiary institutions</Description>
+        <ExampleValue>BNPAFRPP</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_06">
+        <FieldTag>:57A:</FieldTag>
+        <FieldName>Account With Institution</FieldName>
+        <DataType>BIC</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Bank where the beneficiary institution holds its account</Description>
+        <ExampleValue>DEUTDEDB</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_07">
+        <FieldTag>:58A:</FieldTag>
+        <FieldName>Beneficiary Institution</FieldName>
+        <DataType>BIC</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Financial institution that is the final beneficiary of the transfer</Description>
+        <ExampleValue>BARCGB22</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_08">
+        <FieldTag>:72:</FieldTag>
+        <FieldName>Sender to Receiver Information</FieldName>
+        <DataType>TEXT</DataType>
+        <MaxLength>210</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>Additional information for the receiver bank (e.g. cover payment reference)</Description>
+        <ExampleValue>/BNF/Cover payment for MT103 TRF20260427001</ExampleValue>
+      </Field>
+
+    </Fields>
+  </SourceMessage>
+
+  <!-- ============================================= -->
+  <!-- TARGET MESSAGE STRUCTURE (pacs.009) -->
+  <!-- ============================================= -->
+  <TargetMessage>
+    <MessageType>pacs.009.001.08</MessageType>
+    <MessageName>FinancialInstitutionCreditTransfer</MessageName>
+    <Standard>ISO 20022</Standard>
+    <Namespace>urn:iso:std:iso:20022:tech:xsd:pacs.009.001.08</Namespace>
+
+    <Fields>
+
+      <Field id="TARGET_01">
+        <XPath>/Document/FICdtTrf/GrpHdr/MsgId</XPath>
+        <FieldName>Message Identification</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>35</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Description>Unique identification of the pacs.009 message</Description>
+        <ExampleValue>REF20260427ABC</ExampleValue>
+      </Field>
+
+      <Field id="TARGET_02">
+        <XPath>/Document/FICdtTrf/GrpHdr/CreDtTm</XPath>
+        <FieldName>Creation Date Time</FieldName>
+        <DataType>DATETIME</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Date and time at which the message was created</Description>
+      </Field>
+
+      <Field id="TARGET_03">
+        <XPath>/Document/FICdtTrf/GrpHdr/NbOfTxs</XPath>
+        <FieldName>Number of Transactions</FieldName>
+        <DataType>INTEGER</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Always 1 for MT202 conversion</Description>
+      </Field>
+
+      <Field id="TARGET_04">
+        <XPath>/Document/FICdtTrf/CdtTrfTxInf/PmtId/EndToEndId</XPath>
+        <FieldName>End to End Identification</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>35</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Description>Unique identification assigned by ordering institution</Description>
+        <ExampleValue>FIT20260427001</ExampleValue>
+      </Field>
+
+      <Field id="TARGET_05">
+        <XPath>/Document/FICdtTrf/CdtTrfTxInf/PmtId/TxId</XPath>
+        <FieldName>Transaction Identification</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>35</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>Related reference from MT202 field 21</Description>
+        <ExampleValue>REF20260427ABC</ExampleValue>
+      </Field>
+
+      <Field id="TARGET_06">
+        <XPath>/Document/FICdtTrf/CdtTrfTxInf/Amt/InstdAmt</XPath>
+        <FieldName>Instructed Amount</FieldName>
+        <DataType>AMOUNT</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Amount of the interbank transfer</Description>
+        <ExampleValue Ccy="EUR">500000.00</ExampleValue>
+      </Field>
+
+      <Field id="TARGET_07">
+        <XPath>/Document/FICdtTrf/CdtTrfTxInf/InstgAgt/FinInstnId/BICFI</XPath>
+        <FieldName>Instructing Agent BIC</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>11</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Description>BIC of the ordering institution (MT202 field 52A)</Description>
+        <ExampleValue>BIATTNTT</ExampleValue>
+      </Field>
+
+      <Field id="TARGET_08">
+        <XPath>/Document/FICdtTrf/CdtTrfTxInf/IntrmyAgt1/FinInstnId/BICFI</XPath>
+        <FieldName>Intermediary Agent 1 BIC</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>11</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>BIC of the intermediary institution (MT202 field 56A)</Description>
+        <ExampleValue>BNPAFRPP</ExampleValue>
+      </Field>
+
+      <Field id="TARGET_09">
+        <XPath>/Document/FICdtTrf/CdtTrfTxInf/CdtrAgt/FinInstnId/BICFI</XPath>
+        <FieldName>Creditor Agent BIC</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>11</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>BIC of account with institution (MT202 field 57A)</Description>
+        <ExampleValue>DEUTDEDB</ExampleValue>
+      </Field>
+
+      <Field id="TARGET_10">
+        <XPath>/Document/FICdtTrf/CdtTrfTxInf/Cdtr/FinInstnId/BICFI</XPath>
+        <FieldName>Creditor BIC</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>11</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Description>BIC of the beneficiary institution (MT202 field 58A)</Description>
+        <ExampleValue>BARCGB22</ExampleValue>
+      </Field>
+
+      <Field id="TARGET_11">
+        <XPath>/Document/FICdtTrf/CdtTrfTxInf/InstrForCdtrAgt/InstrInf</XPath>
+        <FieldName>Instruction for Creditor Agent</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>140</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>Sender to receiver information (MT202 field 72)</Description>
+        <ExampleValue>/BNF/Cover payment for MT103 TRF20260427001</ExampleValue>
+      </Field>
+
+    </Fields>
+  </TargetMessage>
+
+  <!-- ============================================= -->
+  <!-- FIELD MAPPINGS -->
+  <!-- ============================================= -->
+  <FieldMappings>
+
+    <!-- ==================== MAPPING 01 ==================== -->
+    <Mapping id="MAPPING_01">
+      <SourceField ref="FIELD_02"/>
+      <TargetField ref="TARGET_01"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>target.MsgId = source.field_21</Expression>
+        <PseudoCode>
+          related_reference = source.field_21
+          message_id = related_reference
+          return message_id
+        </PseudoCode>
+      </MappingFormula>
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_21 != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Missing mandatory field 21"</ElseAction>
+        </Condition>
+      </Conditions>
+      <GlobalVariables>
+        <Variable ref="AUDIT_RETENTION_YEARS"/>
+        <Variable ref="MAX_REFERENCE_LENGTH"/>
+      </GlobalVariables>
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Message rejected - cannot process without unique identifier</ImpactIfFails>
+        <BusinessRationale>Related reference from MT202 field 21 becomes the pacs.009 message ID for traceability</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (direct string copy)</PerformanceImpact>
+        <AuditRequirement>Message ID logged for cross-message audit trail. Retained AUDIT_RETENTION_YEARS years.</AuditRequirement>
+        <ComplianceRequirement>Unique reference required per SWIFT ISO 15022 MT202 standards. Enables linkage between cover payment and underlying MT103.</ComplianceRequirement>
+        <DataPrivacy>Reference is operational identifier. No PII. No GDPR special handling required.</DataPrivacy>
+        <MigrationNote>MT202 field 21 (Related Reference) maps to GrpHdr.MsgId in pacs.009 for cover payment traceability.</MigrationNote>
+        <CachingStrategy>No caching - direct copy from source field.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 02 ==================== -->
+    <Mapping id="MAPPING_02">
+      <SourceField ref="FIELD_01"/>
+      <TargetField ref="TARGET_04"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>target.EndToEndId = source.field_20</Expression>
+        <PseudoCode>
+          transaction_reference = source.field_20
+          end_to_end_id = transaction_reference
+          return end_to_end_id
+        </PseudoCode>
+      </MappingFormula>
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_20 != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Missing mandatory field 20"</ElseAction>
+        </Condition>
+      </Conditions>
+      <GlobalVariables>
+        <Variable ref="AUDIT_RETENTION_YEARS"/>
+        <Variable ref="MAX_REFERENCE_LENGTH"/>
+        <Variable ref="DUPLICATE_WINDOW_DAYS"/>
+      </GlobalVariables>
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Payment tracking impossible without end-to-end reference</ImpactIfFails>
+        <BusinessRationale>MT202 field 20 is the transaction reference that maps to EndToEndId for payment tracking</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (direct string copy with format validation)</PerformanceImpact>
+        <AuditRequirement>Transaction reference logged for audit trail. Required for EMIR and MiFID II reporting.</AuditRequirement>
+        <ComplianceRequirement>Unique reference required per SWIFT ISO 15022 MT202 standards.</ComplianceRequirement>
+        <DataPrivacy>Transaction reference is operational identifier. No direct PII.</DataPrivacy>
+        <MigrationNote>Clean 1:1 copy from MT202 field 20 to pacs.009 EndToEndId.</MigrationNote>
+        <CachingStrategy>No caching - direct copy.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 03 ==================== -->
+    <Mapping id="MAPPING_03">
+      <SourceField ref="FIELD_02"/>
+      <TargetField ref="TARGET_05"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>target.TxId = source.field_21</Expression>
+        <PseudoCode>
+          related_ref = source.field_21
+          transaction_id = related_ref
+          return transaction_id
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Cover payment linkage to MT103 lost</ImpactIfFails>
+        <BusinessRationale>Field 21 links MT202 cover payment to original MT103 customer transfer</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (direct string copy)</PerformanceImpact>
+        <AuditRequirement>Related reference stored for cross-message audit trail.</AuditRequirement>
+        <ComplianceRequirement>Required for correspondent banking audit trail and reconciliation.</ComplianceRequirement>
+        <DataPrivacy>Reference is operational data. No PII.</DataPrivacy>
+        <MigrationNote>MT202 field 21 maps to TxId to preserve the link between cover payment and underlying transaction.</MigrationNote>
+        <CachingStrategy>No caching - direct copy.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 04 ==================== -->
+    <Mapping id="MAPPING_04">
+      <SourceField ref="FIELD_03"/>
+      <TargetField ref="TARGET_06"/>
+      <MappingFormula>
+        <Type>EXTRACTION_AND_FORMATTING</Type>
+        <Expression>
+          currency = extract_currency(source.field_32A)
+          amount = extract_amount(source.field_32A)
+          target.InstdAmt = create_xml_amount(amount, currency)
+        </Expression>
+        <PseudoCode>
+          field_32a = source.field_32A
+          date_str = substring(field_32a, 1, 6)
+          currency_code = substring(field_32a, 7, 3)
+          amount_string = substring(field_32a, 10)
+          amount_normalized = replace(amount_string, ",", ".")
+          amount_decimal = parse_decimal(amount_normalized)
+          xml_amount = { value: amount_decimal, currency: currency_code }
+          return xml_amount
+        </PseudoCode>
+      </MappingFormula>
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_32A != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Missing mandatory field 32A"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>CURRENCY_VALIDATION</Type>
+          <Expression>is_valid_iso4217_currency(extracted_currency)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Invalid currency code in field 32A"</ElseAction>
+        </Condition>
+      </Conditions>
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Interbank settlement fails - incorrect amount causes financial loss</ImpactIfFails>
+        <BusinessRationale>Core financial value of the interbank transfer</BusinessRationale>
+        <PerformanceImpact>LOW (string parsing and decimal conversion)</PerformanceImpact>
+        <AuditRequirement>Amount logged with original SWIFT format and converted ISO 20022 format.</AuditRequirement>
+        <ComplianceRequirement>Accurate amount required for settlement finality and regulatory reporting.</ComplianceRequirement>
+        <DataPrivacy>Transaction amount is not PII.</DataPrivacy>
+        <MigrationNote>SWIFT uses comma decimal separator (500000,). ISO 20022 uses dot (500000.00). Conversion mandatory.</MigrationNote>
+        <CachingStrategy>No caching - direct extraction from source field.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 05 ==================== -->
+    <Mapping id="MAPPING_05">
+      <SourceField ref="FIELD_03"/>
+      <TargetField ref="TARGET_06"/>
+      <MappingFormula>
+        <Type>EXTRACTION</Type>
+        <Expression>target.ReqdExctnDt = parse_date(extract_date(source.field_32A))</Expression>
+        <PseudoCode>
+          field_32a = source.field_32A
+          date_str = substring(field_32a, 1, 6)
+          year = "20" + substring(date_str, 1, 2)
+          month = substring(date_str, 3, 2)
+          day = substring(date_str, 5, 2)
+          iso_date = year + "-" + month + "-" + day
+          return iso_date
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>Settlement date incorrect causing value dating errors</ImpactIfFails>
+        <BusinessRationale>Value date from field 32A determines when funds are settled between institutions</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (date parsing)</PerformanceImpact>
+        <AuditRequirement>Value date logged for settlement reconciliation.</AuditRequirement>
+        <ComplianceRequirement>Correct value date required for same-day settlement systems (RTGS).</ComplianceRequirement>
+        <DataPrivacy>Date is operational data. No PII.</DataPrivacy>
+        <MigrationNote>SWIFT date format YYMMDD converts to ISO 8601 YYYY-MM-DD format.</MigrationNote>
+        <CachingStrategy>No caching.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 06 ==================== -->
+    <Mapping id="MAPPING_06">
+      <SourceField ref="FIELD_04"/>
+      <TargetField ref="TARGET_07"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>target.InstgAgt.BICFI = extract_bic(source.field_52A)</Expression>
+        <PseudoCode>
+          field_52a = source.field_52A
+          bic = extract_bic_from_field(field_52a)
+          instructing_agent_bic = validate_bic(bic)
+          return instructing_agent_bic
+        </PseudoCode>
+      </MappingFormula>
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_52A != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>USE sender BIC from message header</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>BIC_FORMAT_VALIDATION</Type>
+          <Expression>is_valid_bic(extracted_bic)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Invalid BIC in field 52A"</ElseAction>
+        </Condition>
+      </Conditions>
+      <GlobalVariables>
+        <Variable ref="BIC_CACHE_TTL_HOURS"/>
+        <Variable ref="SANCTIONS_SCREENING_ENABLED"/>
+      </GlobalVariables>
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Cannot identify ordering institution for settlement</ImpactIfFails>
+        <BusinessRationale>Identifies the bank initiating the interbank transfer — required for settlement chain</BusinessRationale>
+        <PerformanceImpact>LOW (BIC validation from cache)</PerformanceImpact>
+        <AuditRequirement>Ordering institution BIC logged for correspondent banking audit trail.</AuditRequirement>
+        <ComplianceRequirement>Institution-level sanctions screening required per OFAC and EU regulations.</ComplianceRequirement>
+        <DataPrivacy>BIC codes are public identifiers. No GDPR restrictions.</DataPrivacy>
+        <MigrationNote>MT202 field 52A (Ordering Institution) maps directly to pacs.009 InstgAgt (Instructing Agent).</MigrationNote>
+        <CachingStrategy>BIC directory cached BIC_CACHE_TTL_HOURS hours for fast validation.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 07 ==================== -->
+    <Mapping id="MAPPING_07">
+      <SourceField ref="FIELD_05"/>
+      <TargetField ref="TARGET_08"/>
+      <MappingFormula>
+        <Type>CONDITIONAL_COPY</Type>
+        <Expression>
+          IF source.field_56A != null THEN
+            target.IntrmyAgt1.BICFI = extract_bic(source.field_56A)
+          ENDIF
+        </Expression>
+        <PseudoCode>
+          field_56a = source.field_56A
+          if (field_56a is not null) then
+            intermediary_bic = extract_bic_from_field(field_56a)
+            return validate_bic(intermediary_bic)
+          else
+            return null
+          endif
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Intermediary routing chain broken — payment may take longer path</ImpactIfFails>
+        <BusinessRationale>Identifies intermediary bank in the correspondent banking chain</BusinessRationale>
+        <PerformanceImpact>LOW (BIC validation)</PerformanceImpact>
+        <AuditRequirement>Intermediary BIC logged for full payment chain traceability.</AuditRequirement>
+        <ComplianceRequirement>Sanctions screening of intermediary institution required.</ComplianceRequirement>
+        <DataPrivacy>BIC is public identifier. No GDPR restrictions.</DataPrivacy>
+        <MigrationNote>MT202 field 56A (Intermediary Institution) maps to pacs.009 IntrmyAgt1.</MigrationNote>
+        <CachingStrategy>BIC directory cached.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 08 ==================== -->
+    <Mapping id="MAPPING_08">
+      <SourceField ref="FIELD_06"/>
+      <TargetField ref="TARGET_09"/>
+      <MappingFormula>
+        <Type>CONDITIONAL_COPY</Type>
+        <Expression>
+          IF source.field_57A != null THEN
+            target.CdtrAgt.BICFI = extract_bic(source.field_57A)
+          ENDIF
+        </Expression>
+        <PseudoCode>
+          field_57a = source.field_57A
+          if (field_57a is not null) then
+            creditor_agent_bic = extract_bic_from_field(field_57a)
+            return validate_bic(creditor_agent_bic)
+          else
+            return null
+          endif
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>Payment may not reach beneficiary institution correctly</ImpactIfFails>
+        <BusinessRationale>Identifies the bank where beneficiary institution holds account</BusinessRationale>
+        <PerformanceImpact>LOW (BIC validation)</PerformanceImpact>
+        <AuditRequirement>Account with institution BIC logged for payment chain audit.</AuditRequirement>
+        <ComplianceRequirement>BIC must be reachable via SWIFT network.</ComplianceRequirement>
+        <DataPrivacy>BIC is public identifier. No GDPR restrictions.</DataPrivacy>
+        <MigrationNote>MT202 field 57A (Account With Institution) maps to pacs.009 CdtrAgt (Creditor Agent).</MigrationNote>
+        <CachingStrategy>BIC directory cached BIC_CACHE_TTL_HOURS hours.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 09 ==================== -->
+    <Mapping id="MAPPING_09">
+      <SourceField ref="FIELD_07"/>
+      <TargetField ref="TARGET_10"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>target.Cdtr.FinInstnId.BICFI = extract_bic(source.field_58A)</Expression>
+        <PseudoCode>
+          field_58a = source.field_58A
+          beneficiary_bic = extract_bic_from_field(field_58a)
+          return validate_bic(beneficiary_bic)
+        </PseudoCode>
+      </MappingFormula>
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_58A != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Missing mandatory field 58A - beneficiary institution required"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>BIC_FORMAT_VALIDATION</Type>
+          <Expression>is_valid_bic(extracted_bic)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Invalid BIC in field 58A"</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>SANCTIONS_CHECK</Type>
+          <Expression>NOT is_sanctioned_institution(bic)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>BLOCK message AND ALERT compliance team</ElseAction>
+        </Condition>
+      </Conditions>
+      <GlobalVariables>
+        <Variable ref="SANCTIONS_SCREENING_ENABLED"/>
+        <Variable ref="BIC_CACHE_TTL_HOURS"/>
+      </GlobalVariables>
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Payment cannot reach beneficiary institution — funds stuck in transit</ImpactIfFails>
+        <BusinessRationale>Final destination of the interbank transfer — the beneficiary financial institution</BusinessRationale>
+        <PerformanceImpact>LOW (BIC validation from cache + sanctions check)</PerformanceImpact>
+        <AuditRequirement>Beneficiary institution BIC stored for end-to-end payment traceability.</AuditRequirement>
+        <ComplianceRequirement>Mandatory sanctions screening of beneficiary institution per OFAC and EU regulations.</ComplianceRequirement>
+        <DataPrivacy>BIC is public identifier. No GDPR restrictions.</DataPrivacy>
+        <MigrationNote>MT202 field 58A (Beneficiary Institution) maps directly to pacs.009 Cdtr.FinInstnId.BICFI.</MigrationNote>
+        <CachingStrategy>BIC directory cached. Sanctions screening not cached.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 10 ==================== -->
+    <Mapping id="MAPPING_10">
+      <SourceField ref="FIELD_08"/>
+      <TargetField ref="TARGET_11"/>
+      <MappingFormula>
+        <Type>CONDITIONAL_COPY</Type>
+        <Expression>
+          IF source.field_72 != null THEN
+            target.InstrForCdtrAgt.InstrInf = normalize(source.field_72)
+          ENDIF
+        </Expression>
+        <PseudoCode>
+          field_72 = source.field_72
+          if (field_72 is not null) then
+            lines = split_by_newline(field_72)
+            instruction_text = join(lines, " ")
+            instruction_text = trim(normalize_whitespace(instruction_text))
+            return instruction_text
+          else
+            return null
+          endif
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>LOW</Criticality>
+        <ImpactIfFails>Cover payment reference lost — manual reconciliation needed</ImpactIfFails>
+        <BusinessRationale>Sender to receiver information carries cover payment reference and additional routing instructions</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (string manipulation only)</PerformanceImpact>
+        <AuditRequirement>Instruction information logged with transaction for reconciliation.</AuditRequirement>
+        <ComplianceRequirement>Cover payment reference must be preserved for correspondent banking audit trail.</ComplianceRequirement>
+        <DataPrivacy>May contain payment references. No direct PII typically.</DataPrivacy>
+        <MigrationNote>MT202 field 72 (Sender to Receiver Information) maps to pacs.009 InstrForCdtrAgt.InstrInf. /BNF/ prefix used for beneficiary information, /ACC/ for account information.</MigrationNote>
+        <CachingStrategy>No caching required.</CachingStrategy>
+      </General>
+    </Mapping>
+
+  </FieldMappings>
+
+  <!-- ============================================= -->
+  <!-- VALIDATION RULES -->
+  <!-- ============================================= -->
+  <ValidationRules>
+    <PreConversionRules>
+      <Rule id="PRE_01" type="MANDATORY_FIELDS">
+        <Description>Fields 20, 21, 32A, 52A, 58A must be present</Description>
+      </Rule>
+      <Rule id="PRE_02" type="BIC_VALIDATION">
+        <Description>All BIC codes must be valid 8 or 11 character format</Description>
+      </Rule>
+      <Rule id="PRE_03" type="DATE_VALIDATION">
+        <Description>Value date in field 32A must be valid YYMMDD format</Description>
+      </Rule>
+    </PreConversionRules>
+    <PostConversionRules>
+      <Rule id="POST_01" type="SCHEMA_VALIDATION">
+        <Description>Generated pacs.009 must validate against XSD schema</Description>
+      </Rule>
+      <Rule id="POST_02" type="SANCTIONS_SCREENING">
+        <Description>All institution BICs must pass sanctions screening</Description>
+      </Rule>
+    </PostConversionRules>
+  </ValidationRules>
+
+</MessageMapping>

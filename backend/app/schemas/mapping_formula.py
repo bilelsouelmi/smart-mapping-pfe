@@ -16,13 +16,13 @@ class MappingFormulaBase(BaseModel):
     @validator('source_path', 'target_path')
     def validate_path_levels(cls, v):
         """
-        Valider que le chemin ne dépasse pas 3 niveaux
-        3 niveaux = maximum 3 séparateurs (.)
-        Exemple: A.B.C.D = 4 parties, 3 séparateurs = OK
+        Valider que le chemin ne dépasse pas 7 niveaux
+        Supportes les chemins ISO 20022 profonds comme:
+        Stmt.Ntry.NtryDtls.TxDtls.RmtInf.Ustrd (5 séparateurs)
         """
         separator_count = v.count('.')
-        if separator_count > 3:
-            raise ValueError(f'Path cannot have more than 3 separators (4 levels max). Got {separator_count} separators: {v}')
+        if separator_count > 7:
+            raise ValueError(f'Path cannot have more than 7 separators (8 levels max). Got {separator_count} separators: {v}')
         return v
 
 
@@ -30,8 +30,8 @@ class MappingFormulaCreate(MappingFormulaBase):
     message_description_id: int
     example_input: Optional[str] = None
     example_output: Optional[str] = None
-    source_level: Optional[int] = Field(None, ge=1, le=4)  # ← Changé de 3 à 4
-    target_level: Optional[int] = Field(None, ge=1, le=4)  # ← Changé de 3 à 4
+    source_level: Optional[int] = Field(None, ge=1, le=8)
+    target_level: Optional[int] = Field(None, ge=1, le=8)
 
 
 class MappingFormulaUpdate(BaseModel):
@@ -46,17 +46,16 @@ class MappingFormulaUpdate(BaseModel):
     example_input: Optional[str] = None
     example_output: Optional[str] = None
     success_rate: Optional[float] = Field(None, ge=0.0, le=1.0)
-    source_level: Optional[int] = Field(None, ge=1, le=4)  # ← Changé de 3 à 4
-    target_level: Optional[int] = Field(None, ge=1, le=4)  # ← Changé de 3 à 4
+    source_level: Optional[int] = Field(None, ge=1, le=8)
+    target_level: Optional[int] = Field(None, ge=1, le=8)
     
     @validator('source_path', 'target_path')
     def validate_path_levels(cls, v):
-        """Valider qu'il n'y a pas plus de 3 séparateurs (= 4 niveaux max)"""
         if v is None:
             return v
         separator_count = v.count('.')
-        if separator_count > 3:
-            raise ValueError(f'Path cannot have more than 3 separators (4 levels max). Got {separator_count}: {v}')
+        if separator_count > 7:
+            raise ValueError(f'Path cannot have more than 7 separators (8 levels max). Got {separator_count}: {v}')
         return v
 
 

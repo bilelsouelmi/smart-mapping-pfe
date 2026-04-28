@@ -351,7 +351,34 @@ class XMLMappingParser:
             'mandatory': self._get_text(field_elem, 'Mandatory', ns),
             'description': self._get_text(field_elem, 'Description', ns),
             'example_value': self._get_text(field_elem, 'ExampleValue', ns),
+            # ── NOUVEAU : ElementId + TargetPath ──────────────────────────────
+            'element_id': self._get_text(field_elem, 'ElementId', ns),
+            'target_path': self._get_text(field_elem, 'TargetPath', ns),
+            'target_xpath': self._get_text(field_elem, 'TargetXPath', ns),
+            # ── FIN NOUVEAU ───────────────────────────────────────────────────
         }
+
+        # Parse Components if present
+        components_elem = field_elem.find('Components')
+        if components_elem is None and ns:
+            components_elem = field_elem.find('ns:Components', ns)
+        if components_elem is not None:
+            components = []
+            comp_list = components_elem.findall('Component')
+            if not comp_list and ns:
+                comp_list = components_elem.findall('ns:Component', ns)
+            for comp in comp_list:
+                comp_data = {
+                    'name': comp.get('name'),
+                    'type': comp.get('type'),
+                    'format': comp.get('format'),
+                    'target_path': comp.get('targetPath'),
+                    'description': comp.get('description'),
+                }
+                comp_data = {k: v for k, v in comp_data.items() if v is not None}
+                components.append(comp_data)
+            if components:
+                field_data['components'] = components
 
         field_data = {k: v for k, v in field_data.items() if v is not None}
         return field_data

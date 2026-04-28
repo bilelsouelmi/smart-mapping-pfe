@@ -90,6 +90,8 @@
         <ValidationRules>
           <Rule>Must be unique per account per day</Rule>
         </ValidationRules>
+              <ElementId>STMT_REF</ElementId>
+        <TargetPath>GrpHdr.MsgId</TargetPath>
       </Field>
 
       <Field id="FIELD_02">
@@ -101,6 +103,8 @@
         <Format>35x</Format>
         <Description>Account number being reported. Often contains IBAN.</Description>
         <ExampleValue>DE89370400440532013000</ExampleValue>
+              <ElementId>ACCT_IBAN</ElementId>
+        <TargetPath>Stmt.Acct.Id.IBAN</TargetPath>
       </Field>
 
       <Field id="FIELD_03">
@@ -112,6 +116,8 @@
         <Format>5n[/5n]</Format>
         <Description>Statement number and optional sequence. Format: NNNNN or NNNNN/NNNNN.</Description>
         <ExampleValue>00034/001</ExampleValue>
+              <ElementId>STMT_ID</ElementId>
+        <TargetPath>Stmt.Id</TargetPath>
       </Field>
 
       <Field id="FIELD_04">
@@ -128,6 +134,8 @@
           <Component name="Currency" type="STRING" format="ISO4217" length="3"/>
           <Component name="Amount" type="DECIMAL" format="15d"/>
         </Components>
+              <ElementId>OPNG_BAL</ElementId>
+        <TargetPath>Stmt.Bal.OPBD</TargetPath>
       </Field>
 
       <Field id="FIELD_05">
@@ -147,6 +155,8 @@
           <Component name="CustomerReference" type="STRING" format="16x"/>
           <Component name="BankReference" type="STRING" optional="true" description="After // delimiter"/>
         </Components>
+              <ElementId>STMT_ENTRY</ElementId>
+        <TargetPath>Stmt.Ntry</TargetPath>
       </Field>
 
       <Field id="FIELD_06">
@@ -167,6 +177,8 @@
           <Subfield code="32-33" description="Name of ordering party"/>
           <Subfield code="60-63" description="Name of ultimate ordering party"/>
         </SubfieldCodes>
+              <ElementId>TX_DETAILS</ElementId>
+        <TargetPath>Stmt.Ntry.NtryDtls.TxDtls.RmtInf.Ustrd</TargetPath>
       </Field>
 
       <Field id="FIELD_07">
@@ -183,6 +195,8 @@
           <Component name="Currency" type="STRING" format="ISO4217"/>
           <Component name="Amount" type="DECIMAL" format="15d"/>
         </Components>
+              <ElementId>CLSG_BAL</ElementId>
+        <TargetPath>Stmt.Bal.CLBD</TargetPath>
       </Field>
 
       <Field id="FIELD_08">
@@ -193,6 +207,8 @@
         <Format>1!a6!n3!a15d</Format>
         <Description>Available balance - ledger balance minus holds. Same format as fields 60F and 62F.</Description>
         <ExampleValue>C260203EUR54500,00</ExampleValue>
+              <ElementId>AVAIL_BAL</ElementId>
+        <TargetPath>Stmt.Bal.CLAV</TargetPath>
       </Field>
 
     </Fields>

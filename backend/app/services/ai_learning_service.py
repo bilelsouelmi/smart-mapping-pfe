@@ -23,63 +23,32 @@ class AILearningService:
         message_description_id: Optional[int] = None,
         db: Session = None
     ) -> Dict:
-        """
-        Génère une suggestion intelligente pour un champ
-
-        Workflow:
-        1. Cherche dans l'historique d'apprentissage (ai_learning)
-        2. Si trouvé avec haute confiance (>50%) → Retourne suggestion apprise
-        3. Sinon → Fallback sur ElementMatcher
-        4. Enrichit avec Qdrant RAG
-        5. Si Qdrant score < 0.65 → Web Search DuckDuckGo
-        6. Fallback par défaut si rien trouvé
-        """
-        
         print(f"\n🔍 === SUGGEST FIELD MAPPING FOR: {field_id} ===")
         logger.info(f"🔍 Generating suggestion for field: {field_id}")
         
         suggestion = None
 
-        # ── Étape 1 : Cherche dans l'historique d'apprentissage ───────────────
+        # Étape 1 : Historique
         if db:
-            print(f"  Searching in historical data...")
             historical_match = self._find_historical_match(field_id, None, db)
-            
-            if historical_match:
-                confidence = historical_match['confidence']
-                print(f"  ✅ Found historical match with confidence: {confidence:.2f}")
-                
-                if confidence > 0.50:
-                    print(f"  🧠 Using LEARNED suggestion (confidence > 0.50)")
-                    logger.info(f"🧠 Using learned pattern for {field_id} (confidence: {confidence})")
-                    suggestion = {
-                        "element_id": historical_match.get('element_id', field_id),
-                        "element_name": historical_match['description'],
-                        "description": historical_match['description'],
-                        "source": historical_match['source'],
-                        "target": historical_match['target'],
-                        "transformation": historical_match['transformation'],
-                        "criticality": historical_match['criticality'],
-                        "confidence": historical_match['confidence'],
-                        "suggestion_source": "learning",
-                        "mapping_formula": historical_match.get('mapping_formula'),
-                    }
-                else:
-                    print(f"  ⚠️ Confidence too low ({confidence:.2f}), falling back to ElementMatcher")
-            else:
-                print(f"  ❌ No historical match found")
+            if historical_match and historical_match['confidence'] > 0.50:
+                suggestion = {
+                    "element_id": historical_match.get('element_id', field_id),
+                    "element_name": historical_match['description'],
+                    "description": historical_match['description'],
+                    "source": historical_match['source'],
+                    "target": historical_match['target'],
+                    "transformation": historical_match['transformation'],
+                    "criticality": historical_match['criticality'],
+                    "confidence": historical_match['confidence'],
+                    "suggestion_source": "learning",
+                    "mapping_formula": historical_match.get('mapping_formula'),
+                }
 
-        # ── Étape 2 : Fallback sur ElementMatcher ────────────────────────────
+        # Étape 2 : ElementMatcher
         if suggestion is None:
-            print(f"  📚 Using ElementMatcher")
-            logger.info(f"📚 Using ElementMatcher for {field_id}")
-
-            # ── NOUVEAU : pour les tags MT, utiliser le nom du bloc comme field_name
-            matcher_field_id = field_id
             matcher_field_name = field_name or field_id
             if field_id.startswith(':'):
-                # Extraire le nom lisible du tag MT
-                # ex: ":32A.Currency" → "Currency", ":20" → "Transaction Reference"
                 mt_names = {
                     ':20': 'Transaction Reference',
                     ':32A': 'Value Date Currency Amount',
@@ -93,17 +62,14 @@ class AILearningService:
                 }
                 if '.' in field_id:
                     tag, sub = field_id.split('.', 1)
-                    matcher_field_name = sub  # e.g. "Currency", "Name", "Account"
+                    matcher_field_name = sub
                 else:
                     matcher_field_name = mt_names.get(field_id, field_id.replace(':', ''))
-            # ── FIN NOUVEAU ───────────────────────────────────────────────────
 
             matcher = ElementMatcher(db)
             matches = matcher._find_matches(matcher_field_name, sample_data)
-            
-            if matches and len(matches) > 0:
+            if matches:
                 best_match = matches[0]
-                print(f"  ✅ ElementMatcher found: {best_match['element_name']} (confidence: {best_match['confidence']}%)")
                 suggestion = {
                     "element_id": best_match['element_id'],
                     "element_name": best_match['element_name'],
@@ -116,10 +82,8 @@ class AILearningService:
                     "suggestion_source": "element_matcher"
                 }
 
-        # ── Étape 3 : Fallback par défaut ────────────────────────────────────
+        # Étape 3 : Default
         if suggestion is None:
-            print(f"  ⚠️ No match found, using default")
-            logger.info(f"⚠️ No match found for {field_id}, using default")
             suggestion = {
                 "element_id": field_id,
                 "element_name": field_name or field_id,
@@ -132,9 +96,8 @@ class AILearningService:
                 "suggestion_source": "default"
             }
 
-        # ── Étape 4 : Enrichissement Qdrant RAG ──────────────────────────────
+        # Étape 4 : RAG Enrichment
         try:
-            # ── NOUVEAU : query enrichie pour tags MT ─────────────────────────
             qdrant_field_name = field_name or field_id
             if field_id.startswith(':'):
                 if '.' in field_id:
@@ -142,20 +105,23 @@ class AILearningService:
                     qdrant_field_name = f"SWIFT MT {tag} {sub} field"
                 else:
                     qdrant_field_name = f"SWIFT MT {field_id} field"
-            # ── FIN NOUVEAU ───────────────────────────────────────────────────
 
             rag_enrichment = self._enrich_from_qdrant(field_id, qdrant_field_name)
             if rag_enrichment:
                 if suggestion.get('mapping_formula'):
                     rag_enrichment.pop('mapping_formula', None)
                 suggestion.update(rag_enrichment)
-                print(f"  ✨ Enriched with Qdrant RAG data (mapping: {rag_enrichment.get('rag_mapping_id')})")
-                logger.info(f"✨ RAG enrichment applied for {field_id}")
+                if not suggestion.get('target') and rag_enrichment.get('rag_target_path'):
+                    suggestion['target'] = rag_enrichment['rag_target_path']
+                    suggestion['target_path'] = rag_enrichment['rag_target_path']
+                if (not suggestion.get('element_id') or suggestion.get('element_id') == field_id) and rag_enrichment.get('rag_element_id'):
+                    suggestion['element_id'] = rag_enrichment['rag_element_id']
+                    suggestion['element_name'] = rag_enrichment['rag_element_id']
+                print(f"  ✨ Enriched with RAG (mapping: {rag_enrichment.get('rag_mapping_id')})")
         except Exception as e:
             logger.warning(f"RAG enrichment failed for {field_id}: {e}")
-            print(f"  ⚠️ RAG enrichment failed: {e}")
 
-        # ── Étape 5 : Web Search DuckDuckGo si Qdrant insuffisant ────────────
+        # Étape 5 : Web Search
         rag_score = suggestion.get('rag_similarity_score', 0.0) or 0.0
         should_search_web = (
             suggestion.get('suggestion_source') == 'default' or
@@ -164,7 +130,6 @@ class AILearningService:
         )
         if should_search_web:
             try:
-                # ── NOUVEAU : query web enrichie pour tags MT ─────────────────
                 web_field_name = field_name or field_id
                 if field_id.startswith(':'):
                     if '.' in field_id:
@@ -172,26 +137,20 @@ class AILearningService:
                         web_field_name = f"SWIFT {tag} {sub}"
                     else:
                         web_field_name = f"SWIFT {field_id} field"
-                # ── FIN NOUVEAU ───────────────────────────────────────────────
 
                 web_results = await self._search_web(field_id, web_field_name)
                 if web_results:
                     suggestion['web_enrichment'] = web_results
                     suggestion['web_search_performed'] = True
-                    print(f"  🌐 Web enrichment added for {field_id} ({len(web_results)} results)")
-                    logger.info(f"🌐 Web enrichment applied for {field_id}")
                 else:
                     suggestion['web_search_performed'] = True
                     suggestion['web_enrichment'] = []
-                    print(f"  🌐 Web search performed but no results for {field_id}")
             except Exception as e:
                 logger.warning(f"Web search failed for {field_id}: {e}")
-                print(f"  ⚠️ Web search failed: {e}")
 
         return suggestion
 
     async def _search_web(self, field_id: str, field_name: str) -> Optional[List[Dict]]:
-        """Recherche DuckDuckGo pour enrichir les infos sur un field SWIFT/ISO 20022."""
         try:
             from ddgs import DDGS
             query = f"{field_name or field_id} SWIFT ISO 20022 banking field definition"
@@ -217,14 +176,58 @@ class AILearningService:
             if not rag_service._is_available():
                 return None
 
+            # ── Step 1: Direct lookup by field_tag in Qdrant ─────────────────
+            src_target_path = None
+            src_element_id = None
+            src_mapping_id = None
+            try:
+                from qdrant_client.models import Filter, FieldCondition, MatchValue
+                from app.services.qdrant_manager import qdrant_manager as _qm
+                clean_tag = str(field_id).strip()
+                tag_variants = [
+                    clean_tag,
+                    f":{clean_tag.strip(':')}:",
+                    f":{clean_tag.strip(':')}"
+                ]
+                for tv in tag_variants:
+                    _r = _qm.client.scroll(
+                        collection_name=_qm.collection_name,
+                        scroll_filter=Filter(must=[
+                            FieldCondition(key='chunk_type', match=MatchValue(value='SOURCE_FIELD')),
+                            FieldCondition(key='field_tag', match=MatchValue(value=tv))
+                        ]),
+                        limit=3,
+                        with_payload=True
+                    )
+                    for _p in _r[0]:
+                        if _p.payload.get('target_path'):
+                            src_target_path = _p.payload['target_path']
+                            src_element_id = _p.payload.get('element_id')
+                            src_mapping_id = _p.payload.get('mapping_id')
+                            break
+                    if src_target_path:
+                        break
+                if src_target_path:
+                    print(f"  🎯 Direct lookup: {field_id} → {src_target_path}")
+            except Exception as _e:
+                logger.warning(f"Direct field_tag lookup failed: {_e}")
+
+            # ── Step 2: Semantic search for compliance/audit enrichment ───────
             query = f"field mapping {field_name or field_id} transformation rules compliance audit"
             results = rag_service.query(
                 query=query,
-                n_results=3,
+                n_results=5,
                 filter_metadata={"chunk_type": "FIELD_MAPPING"}
             )
 
             if not results:
+                if src_target_path:
+                    return {
+                        "rag_target_path": src_target_path,
+                        "rag_element_id": src_element_id,
+                        "rag_mapping_id": src_mapping_id,
+                        "rag_similarity_score": 0.7,
+                    }
                 return None
 
             metadatas = results.get('metadatas', [[]])[0]
@@ -255,6 +258,9 @@ class AILearningService:
                 "has_migration_note": best_meta.get('has_migration_note', False),
                 "mapping_formula": mapping_formula_obj.get('pseudocode') if isinstance(mapping_formula_obj, dict) else None,
                 "global_variable_refs": list(global_vars_dict.keys()) if global_vars_dict else [],
+                "rag_target_path": src_target_path or best_meta.get('target_path'),
+                "rag_element_id": src_element_id or best_meta.get('element_id'),
+                "rag_src_mapping_id": src_mapping_id,
             }
 
             enrichment["audit_requirement"] = best_meta.get('audit_requirement') or self._extract_section(best_doc, "Audit Requirement:")
@@ -271,7 +277,6 @@ class AILearningService:
             return None
 
     def _extract_section(self, text: str, label: str) -> Optional[str]:
-        """Extrait le contenu d'une section depuis le texte d'un chunk."""
         if not text or label not in text:
             return None
         try:
@@ -294,73 +299,32 @@ class AILearningService:
         except Exception:
             return None
 
-    def _find_historical_match(
-        self,
-        field_id: str,
-        field_tag: Optional[str],
-        db: Session
-    ) -> Optional[Dict]:
-        """Cherche dans l'historique des décisions acceptées/éditées"""
+    def _find_historical_match(self, field_id, field_tag, db):
         if not db:
             return None
-        
         patterns = self._generate_patterns(field_id)
-        print(f"    🔎 Generated patterns: {patterns}")
-        
         query = db.query(AILearning).filter(
             AILearning.user_action.in_(['accept', 'edit']),
             AILearning.field_pattern.in_(patterns)
         )
-        
         if field_tag:
             query = query.filter(AILearning.field_tag == field_tag)
-        
         results = query.order_by(AILearning.created_at.desc()).limit(10).all()
-        print(f"    📊 Found {len(results)} historical entries")
-        
         if not results:
             return None
-        
         confidence = self._calculate_confidence(results)
         aggregated = self._aggregate_results(results)
-        
-        print(f"    🎯 Aggregated description: {aggregated.get('description')}")
-        print(f"    📈 Calculated confidence: {confidence:.2f}")
-        
-        return {
-            "confidence": confidence,
-            **aggregated
-        }
-    
-    def record_user_decision(
-        self,
-        field_id: str,
-        field_tag: Optional[str],
-        suggestion: Dict,
-        user_action: str,
-        final_values: Optional[Dict],
-        message_description_id: Optional[int],
-        mapping_formula_id: Optional[int],
-        user_id: int,
-        db: Session
-    ):
-        """Enregistre la décision de l'utilisateur pour apprentissage futur"""
-        print(f"\n📝 === RECORDING DECISION: {user_action} for {field_id} ===")
-        
+        return {"confidence": confidence, **aggregated}
+
+    def record_user_decision(self, field_id, field_tag, suggestion, user_action,
+                              final_values, message_description_id, mapping_formula_id,
+                              user_id, db):
         if user_action not in ['accept', 'edit', 'reject']:
             raise ValueError(f"Invalid action: {user_action}")
-        
         field_pattern = self._generate_patterns(field_id)[0]
-        print(f"  Field pattern: {field_pattern}")
-        
         confidence_raw = suggestion.get('confidence', 0.5)
-        if confidence_raw > 1:
-            confidence_score = confidence_raw / 100.0
-        else:
-            confidence_score = confidence_raw
-        
+        confidence_score = confidence_raw / 100.0 if confidence_raw > 1 else confidence_raw
         suggested_description = suggestion.get('description') or suggestion.get('element_name')
-        
         learning_entry = AILearning(
             field_pattern=field_pattern,
             field_tag=field_tag,
@@ -379,7 +343,6 @@ class AILearningService:
             mapping_formula_id=mapping_formula_id,
             created_by=user_id
         )
-        
         if user_action == 'edit' and final_values:
             learning_entry.final_element_id = final_values.get('element_id')
             learning_entry.final_description = final_values.get('element_name') or final_values.get('description')
@@ -388,7 +351,6 @@ class AILearningService:
             learning_entry.final_transformation = final_values.get('transformation')
             learning_entry.final_criticality = final_values.get('criticality')
             learning_entry.final_mapping_formula = final_values.get('mapping_formula')
-            print(f"  Final (edited): {learning_entry.final_description}")
         elif user_action == 'accept':
             learning_entry.final_element_id = suggestion.get('element_id')
             learning_entry.final_description = suggested_description
@@ -397,58 +359,38 @@ class AILearningService:
             learning_entry.final_transformation = suggestion.get('transformation')
             learning_entry.final_criticality = suggestion.get('criticality')
             learning_entry.final_mapping_formula = suggestion.get('mapping_formula')
-            print(f"  Final (accepted): {learning_entry.final_description}")
-        
         db.add(learning_entry)
         db.commit()
         db.refresh(learning_entry)
-        
-        print(f"  ✅ Recorded decision ID: {learning_entry.id}")
         logger.info(f"✅ Recorded {user_action} for {field_id} by user {user_id}")
-        
         return learning_entry
-    
-    def _generate_patterns(self, field_id: str) -> List[str]:
-        """
-        Génère des patterns pour matching.
-        Supporte maintenant les tags MT SWIFT (:20, :32A.Currency, etc.)
-        """
-        patterns = [field_id]
 
-        # ── NOUVEAU : patterns pour tags MT SWIFT ─────────────────────────────
+    def _generate_patterns(self, field_id):
+        patterns = [field_id]
         if field_id.startswith(':'):
             if '.' in field_id:
-                # :32A.Currency → aussi matcher :32A.* et *.Currency
                 tag, sub = field_id.split('.', 1)
                 patterns.append(f"{tag}.*")
                 patterns.append(f"*.{sub}")
             else:
-                # :20 → pattern exact seulement
                 patterns.append(field_id)
-        # ── FIN NOUVEAU ───────────────────────────────────────────────────────
-
         elif '_' in field_id and field_id.startswith('FIELD_'):
             parts = field_id.split('_')
             if len(parts) == 2 and parts[1].isdigit():
                 number = parts[1]
                 patterns.append(f"FIELD_*{number[-1]}")
                 patterns.append(f"FIELD_{number[0]}*")
-        
         elif '.' in field_id:
             parts = field_id.split('.')
             if len(parts) == 2:
                 patterns.append(f"*.{parts[1]}")
                 patterns.append(f"{parts[0]}.*")
-        
         return patterns
-    
-    def _calculate_confidence(self, results: List[AILearning]) -> float:
-        """Calcule le score de confiance"""
+
+    def _calculate_confidence(self, results):
         if not results:
             return 0.0
-        
         count_factor = min(len(results) / 10.0, 1.0)
-        
         now = datetime.datetime.now()
         recency_scores = []
         for r in results:
@@ -459,43 +401,22 @@ class AILearningService:
             recency = 1.0 / (1.0 + days_old / 30.0)
             recency_scores.append(recency)
         recency_factor = sum(recency_scores) / len(recency_scores)
-        
-        final_targets = [
-            r.final_target or r.suggested_target 
-            for r in results 
-            if (r.final_target or r.suggested_target)
-        ]
-        
+        final_targets = [r.final_target or r.suggested_target for r in results if (r.final_target or r.suggested_target)]
         if final_targets:
             most_common = max(set(final_targets), key=final_targets.count)
             coherence_factor = final_targets.count(most_common) / len(final_targets)
         else:
             coherence_factor = 0.5
-        
-        confidence = (
-            count_factor * 0.3 + 
-            recency_factor * 0.3 + 
-            coherence_factor * 0.4
-        )
-        
-        return round(confidence, 2)
-    
-    def _aggregate_results(self, results: List[AILearning]) -> Dict:
-        """Agrège les résultats pour trouver la suggestion la plus commune"""
+        return round(count_factor * 0.3 + recency_factor * 0.3 + coherence_factor * 0.4, 2)
+
+    def _aggregate_results(self, results):
         element_ids = [r.final_element_id or r.suggested_element_id for r in results if (r.final_element_id or r.suggested_element_id)]
         descriptions = [r.final_description or r.suggested_description for r in results if (r.final_description or r.suggested_description)]
         sources = [r.final_source or r.suggested_source for r in results if (r.final_source or r.suggested_source)]
         targets = [r.final_target or r.suggested_target for r in results if (r.final_target or r.suggested_target)]
         transformations = [r.final_transformation or r.suggested_transformation for r in results if (r.final_transformation or r.suggested_transformation)]
         criticalities = [r.final_criticality or r.suggested_criticality for r in results if (r.final_criticality or r.suggested_criticality)]
-        
-        mapping_formulas = [
-            r.final_mapping_formula or r.suggested_mapping_formula
-            for r in results
-            if (r.final_mapping_formula or r.suggested_mapping_formula)
-        ]
-        best_mapping_formula = mapping_formulas[0] if mapping_formulas else None
-
+        mapping_formulas = [r.final_mapping_formula or r.suggested_mapping_formula for r in results if (r.final_mapping_formula or r.suggested_mapping_formula)]
         return {
             "element_id": Counter(element_ids).most_common(1)[0][0] if element_ids else None,
             "description": Counter(descriptions).most_common(1)[0][0] if descriptions else None,
@@ -503,7 +424,7 @@ class AILearningService:
             "target": Counter(targets).most_common(1)[0][0] if targets else None,
             "transformation": Counter(transformations).most_common(1)[0][0] if transformations else "DIRECT_COPY",
             "criticality": Counter(criticalities).most_common(1)[0][0] if criticalities else "MEDIUM",
-            "mapping_formula": best_mapping_formula
+            "mapping_formula": mapping_formulas[0] if mapping_formulas else None
         }
 
 
