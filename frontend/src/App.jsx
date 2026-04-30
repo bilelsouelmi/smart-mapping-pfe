@@ -10,6 +10,8 @@ import UploadPage from './pages/UploadPage';
 import MappingsPage from './pages/MappingsPage';
 import OutputsPage from './pages/OutputsPage';
 import RAGSearch from './pages/RAGSearch';  // ← AJOUTÉ
+import MessageDescriptionPage from './pages/MessageDescriptionPage';
+
 
 // Protected Route Component
 const ProtectedRoute = ({ children }) => {
@@ -88,6 +90,15 @@ function App() {
               </ProtectedRoute>
             }
           />
+          <Route
+            path="/message-descriptions"
+            element={
+              <ProtectedRoute>
+                <MessageDescriptionPage />
+              </ProtectedRoute>
+            }
+          />
+          
 
           {/* Redirect root to dashboard or login */}
           <Route path="/" element={<Navigate to="/dashboard" />} />

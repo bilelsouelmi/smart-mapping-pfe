@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Upload, FileText, Database, TrendingUp, Sparkles, Zap } from 'lucide-react';
@@ -12,11 +12,22 @@ const UploadPage = () => {
   const [analysisResult, setAnalysisResult] = useState(null);
   const [mtBlocksConfirmed, setMtBlocksConfirmed] = useState(false);
 
+  useEffect(() => {
+    const saved = sessionStorage.getItem('upload_page_state');
+    if (saved) {
+      try {
+        const { result, confirmed } = JSON.parse(saved);
+        if (result) { setAnalysisResult(result); setMtBlocksConfirmed(confirmed || false); }
+      } catch (e) {}
+    }
+  }, []);
+
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0];
     if (selectedFile) {
       setFile(selectedFile);
       setAnalysisResult(null);
+      sessionStorage.removeItem('upload_page_state');
     }
   };
 
@@ -35,6 +46,7 @@ const UploadPage = () => {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setAnalysisResult(response.data);
+      sessionStorage.setItem('upload_page_state', JSON.stringify({ result: response.data, confirmed: false }));
       alert('🎉 File analyzed successfully!');
     } catch (error) {
       console.error('Upload error:', error);
@@ -48,6 +60,7 @@ const UploadPage = () => {
     setFile(null);
     setAnalysisResult(null);
     setMtBlocksConfirmed(false);
+    sessionStorage.removeItem('upload_page_state');
     const fileInput = document.getElementById('file-upload');
     if (fileInput) fileInput.value = '';
   };
@@ -234,7 +247,6 @@ const UploadPage = () => {
                     value={Object.keys(analysisResult.suggestions || {}).length}
                     color="#f56565"
                   />
-                  {/* ── NOUVEAU : MT stats ─────────────────────────────────── */}
                   {isMT && (
                     <>
                       <StatsCard
@@ -251,28 +263,26 @@ const UploadPage = () => {
                       />
                     </>
                   )}
-                  {/* ── FIN NOUVEAU ─────────────────────────────────────────── */}
                 </div>
 
-                {/* ── MT Block Review ──────────────────────────────────────────── */}
+                {/* MT Block Review */}
                 {showMTReview && analysisResult.mt_blocks && (
                   <MTBlockReview
                     analysisResult={analysisResult}
                     onConfirmed={(confirmedBlocks) => {
-                      setAnalysisResult(prev => ({ ...prev, mt_blocks: confirmedBlocks }));
+                      const updated = { ...analysisResult, mt_blocks: confirmedBlocks };
+                      setAnalysisResult(updated);
                       setMtBlocksConfirmed(true);
+                      sessionStorage.setItem('upload_page_state', JSON.stringify({ result: updated, confirmed: true }));
                     }}
                     onRegenerate={(newData) => {
-                      setAnalysisResult(prev => ({
-                        ...prev,
-                        suggestions: newData.suggestions,
-                        mt_blocks: prev.mt_blocks
-                      }));
+                      const updated = { ...analysisResult, suggestions: newData.suggestions, mt_blocks: analysisResult.mt_blocks };
+                      setAnalysisResult(updated);
                       setMtBlocksConfirmed(true);
+                      sessionStorage.setItem('upload_page_state', JSON.stringify({ result: updated, confirmed: true }));
                     }}
                   />
                 )}
-                {/* ── FIN MT Block Review ───────────────────────────────────────── */}
 
                 {/* Suggestions Section */}
                 {showSuggestions && <Card>
@@ -354,7 +364,7 @@ const UploadPage = () => {
   );
 };
 
-// ── NOUVEAU : MT Block Card ───────────────────────────────────────────────────
+// MT Block Card
 const MTBlockCard = ({ tag, block }) => (
   <motion.div
     whileHover={{ scale: 1.02 }}
@@ -365,7 +375,6 @@ const MTBlockCard = ({ tag, block }) => (
       padding: '1rem'
     }}
   >
-    {/* Header */}
     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
       <span style={{
         padding: '2px 10px',
@@ -394,12 +403,10 @@ const MTBlockCard = ({ tag, block }) => (
       </span>
     </div>
 
-    {/* Format */}
     <div style={{ fontSize: '0.75rem', color: '#6b7280', marginBottom: '0.5rem' }}>
       format: <span style={{ color: '#9ca3af', fontFamily: 'monospace' }}>{block.format}</span>
     </div>
 
-    {/* Value or Sub-fields */}
     {block.type === 'string' && block.value && (
       <div style={{
         padding: '4px 8px',
@@ -438,7 +445,6 @@ const MTBlockCard = ({ tag, block }) => (
     )}
   </motion.div>
 );
-// ── FIN NOUVEAU ───────────────────────────────────────────────────────────────
 
 // Card Component
 const Card = ({ children, style }) => (

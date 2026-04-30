@@ -7,13 +7,15 @@ import logging
 from app.api.routes import xml_mappings
 from app.api.routes import rag_admin
 from app.api.routes import rag
-from app.api.routes import ai_learning  # ← NOUVEAU
+from app.api.routes import ai_learning
+from app.api.routes import element_routes
+from app.api.routes import element_routes  # ── NOUVEAU ──
 
 # Force Qdrant Manager initialization at import
 from app.services.qdrant_manager import qdrant_manager as chromadb_manager
 
-# Import AI Learning model
-from app.models.ai_learning import AILearning  # ← NOUVEAU
+# Import models for table creation
+from app.models.ai_learning import AILearning
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -40,7 +42,9 @@ Base.metadata.create_all(bind=engine)
 app.include_router(api_router, prefix="/api")
 app.include_router(rag_admin.router, prefix="/api")
 app.include_router(xml_mappings.router, prefix="/api")
-app.include_router(ai_learning.router, prefix="/api")  # ← NOUVEAU
+app.include_router(ai_learning.router, prefix="/api")
+app.include_router(element_routes.router, prefix="/api")
+app.include_router(element_routes.router, prefix="/api")  # ── NOUVEAU ──
 
 @app.get("/")
 async def root():
@@ -105,7 +109,6 @@ async def startup_event():
         import requests
         import time
         
-        # Test Qdrant REST API
         qdrant_url = f"http://{settings.QDRANT_HOST}:{settings.QDRANT_PORT}/"
         logger.info(f"   Testing URL: {qdrant_url}")
         
@@ -116,7 +119,6 @@ async def startup_event():
                 response = requests.get(qdrant_url, timeout=5)
                 logger.info(f"   Response status: {response.status_code}")
                 
-                # Qdrant returns 200 on root
                 if response.status_code == 200:
                     logger.info("✅ Qdrant connected and responding")
                     break

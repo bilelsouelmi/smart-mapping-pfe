@@ -186,8 +186,11 @@ class SWIFTTextParser:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
 
-            # Extract body
-            body = self._extract_body(content)
+            # Parse SWIFT envelope blocks {1:} {2:} {4:}
+            swift_blocks = self._parse_swift_blocks(content)
+
+            # Extract body from block4 or raw content
+            body = swift_blocks.get("block4") or self._extract_body(content)
 
             # Parse raw tags from body
             raw_tags = self._parse_tags(body)
@@ -202,6 +205,103 @@ class SWIFTTextParser:
 
             # Build mt_blocks using XML definitions
             mt_blocks = self._build_blocks(raw_tags, tag_defs, mt_type)
+
+            # ── NOUVEAU : Add block1, block2, block3, block4, block5 to mt_blocks ─
+            if "block1" in swift_blocks:
+                b1_sub = self._parse_block1(swift_blocks["block1"])
+                mt_blocks["block1"] = {
+                    "tag": "block1",
+                    "name": "block1",
+                    "type": "map",
+                    "format": "25!x",
+                    "mandatory": True,
+                    "value": swift_blocks["block1"],
+                    "sub_fields": b1_sub,
+                    "sub_fields_order": list(b1_sub.keys())
+                }
+
+            if "block2" in swift_blocks:
+                b2_val = swift_blocks["block2"]
+                if b2_val.startswith("I"):
+                    b2_sub = self._parse_block2_input(b2_val)
+                    b2_inner_name = "block2Input"
+                else:
+                    b2_sub = self._parse_block2_output(b2_val)
+                    b2_inner_name = "block2Output"
+                mt_blocks["block2"] = {
+                    "tag": "block2",
+                    "name": "block2",
+                    "type": "map",
+                    "format": "35x",
+                    "mandatory": True,
+                    "value": b2_val,
+                    "sub_fields": {
+                        b2_inner_name: {
+                            "type": "map",
+                            "format": "35x",
+                            "value": b2_val,
+                            "sub_fields": b2_sub,
+                            "sub_fields_order": list(b2_sub.keys())
+                        }
+                    },
+                    "sub_fields_order": [b2_inner_name]
+                }
+
+            # Add block3 (user header) if present
+            if "block3" in swift_blocks:
+                b3_val = swift_blocks["block3"]
+                # Parse block3 tags like {108:...}{113:...}
+                b3_tags = re.findall(r'\{(\w+):([^}]*)\}', b3_val)
+                b3_sub = {}
+                for tag_name, tag_val in b3_tags:
+                    b3_sub[tag_name] = {"format": "35x", "value": tag_val, "description": f"Block 3 field {tag_name}"}
+                mt_blocks["block3"] = {
+                    "tag": "block3",
+                    "name": "block3",
+                    "type": "map",
+                    "format": "35x",
+                    "mandatory": False,
+                    "value": b3_val,
+                    "sub_fields": b3_sub if b3_sub else {"Value": {"format": "35x", "value": b3_val}}
+                }
+
+            # Add block5 (trailer) if present
+            if "block5" in swift_blocks:
+                b5_val = swift_blocks["block5"]
+                b5_tags = re.findall(r'\{(\w+):([^}]*)\}', b5_val)
+                b5_sub = {}
+                for tag_name, tag_val in b5_tags:
+                    b5_sub[tag_name] = {"format": "35x", "value": tag_val, "description": f"Block 5 field {tag_name}"}
+                mt_blocks["block5"] = {
+                    "tag": "block5",
+                    "name": "block5",
+                    "type": "map",
+                    "format": "35x",
+                    "mandatory": False,
+                    "value": b5_val,
+                    "sub_fields": b5_sub if b5_sub else {"Value": {"format": "35x", "value": b5_val}}
+                }
+
+            # Rename body blocks to block4
+            body_blocks = {}
+            for tag, block in mt_blocks.items():
+                if not tag.startswith("block"):
+                    body_blocks[tag] = block
+            if body_blocks:
+                mt_blocks["block4"] = {
+                    "tag": "block4",
+                    "name": "block4",
+                    "type": "map",
+                    "format": "35x",
+                    "mandatory": True,
+                    "value": "",
+                    "sub_fields": body_blocks,
+                    "sub_fields_order": list(body_blocks.keys())
+                }
+                # Remove body blocks from top level
+                for tag in list(body_blocks.keys()):
+                    del mt_blocks[tag]
+            # ── FIN NOUVEAU ───────────────────────────────────────────────
 
             # ISO target
             iso_target = MT_TO_ISO_TARGET.get(mt_type, "pacs.008.001.08")
@@ -236,12 +336,18 @@ class SWIFTTextParser:
     # ── Step 5: Parse raw tags ────────────────────────────────────────────────
 
     def _parse_tags(self, body: str) -> Dict[str, str]:
-        """Extract all :TAG:VALUE pairs from body."""
+        """Extract all :TAG:VALUE pairs from body. Handles duplicate tags with index suffix."""
         tags = {}
+        tag_counts = {}
         pattern = r':(\d{2}[A-Z]?):(.*?)(?=:\d{2}[A-Z]?:|$)'
         matches = re.findall(pattern, body, re.DOTALL)
         for tag, value in matches:
-            tags[tag] = value.strip()
+            if tag not in tag_counts:
+                tag_counts[tag] = 0
+                tags[tag] = value.strip()
+            else:
+                tag_counts[tag] += 1
+                tags[f"{tag}_{tag_counts[tag]}"] = value.strip()
         return tags
 
     # ── Step 6: Detect MT type ────────────────────────────────────────────────
@@ -263,20 +369,22 @@ class SWIFTTextParser:
     def _build_blocks(self, raw_tags: Dict[str, str], tag_defs: Dict, mt_type: str) -> Dict[str, Any]:
         """
         Build mt_blocks from raw tags using XML tag definitions.
-        If no definition found for a tag, use a generic definition.
+        Always stores sub_fields_order to preserve insertion order against PostgreSQL JSONB sorting.
         """
         mt_blocks = {}
 
         for tag, value in raw_tags.items():
+            # Clean tag: remove index suffix for definition lookup: 61_1 → 61
+            import re as _re
+            clean_tag = _re.sub(r'_\d+$', '', tag)
             swift_tag = f":{tag}"
 
-            # Get definition from XML
-            tag_def = tag_defs.get(tag)
+            # Get definition from XML using clean tag
+            tag_def = tag_defs.get(clean_tag)
 
             if tag_def is None:
-                # Generic fallback for unknown tags
                 tag_def = {
-                    "name": tag,
+                    "name": clean_tag,
                     "type": "string",
                     "format": "35x",
                     "mandatory": False,
@@ -296,9 +404,8 @@ class SWIFTTextParser:
                 }
 
             elif block_type == "map":
-                # Parse sub-fields from value
                 xml_sub_fields = tag_def.get("sub_fields") or {}
-                parsed_sub_fields = self._parse_sub_fields(tag, value, xml_sub_fields)
+                parsed_sub_fields = self._parse_sub_fields(clean_tag, value, xml_sub_fields)
 
                 mt_blocks[swift_tag] = {
                     "tag": swift_tag,
@@ -306,7 +413,8 @@ class SWIFTTextParser:
                     "type": "map",
                     "format": tag_def.get("format", "35x"),
                     "mandatory": tag_def.get("mandatory", False),
-                    "sub_fields": parsed_sub_fields
+                    "sub_fields": parsed_sub_fields,
+                    "sub_fields_order": list(parsed_sub_fields.keys())
                 }
 
         return mt_blocks
@@ -386,6 +494,116 @@ class SWIFTTextParser:
                 sub_fields["Value"] = {"format": "35x", "value": value}
 
         return sub_fields
+
+
+    # ── NOUVEAU : Parse SWIFT envelope blocks {1:} {2:} {4:} ─────────────────
+
+    def _parse_swift_blocks(self, content: str) -> Dict[str, str]:
+        """Extract all SWIFT blocks {N:...} including nested braces."""
+        blocks = {}
+
+        # Block 4 ends with -} — extract first (special case)
+        b4 = re.search(r'\{4:(.*?)-\}', content, re.DOTALL)
+        if b4:
+            blocks["block4"] = b4.group(1).strip()
+            # Remove block4 to avoid confusion
+            content_no_b4 = content[:b4.start()] + content[b4.end():]
+        else:
+            content_no_b4 = content
+
+        # Parse other blocks using balanced brace matching
+        i = 0
+        while i < len(content_no_b4):
+            if (content_no_b4[i] == '{' and
+                i + 2 < len(content_no_b4) and
+                content_no_b4[i+1].isdigit() and
+                content_no_b4[i+2] == ':'):
+                block_num = content_no_b4[i+1]
+                depth = 1
+                j = i + 3
+                while j < len(content_no_b4) and depth > 0:
+                    if content_no_b4[j] == '{':
+                        depth += 1
+                    elif content_no_b4[j] == '}':
+                        depth -= 1
+                    j += 1
+                block_content = content_no_b4[i+3:j-1].strip()
+                if block_content:
+                    blocks[f"block{block_num}"] = block_content
+                i = j
+            else:
+                i += 1
+
+        return blocks
+
+    def _parse_block1(self, value: str) -> Dict[str, Any]:
+        """Parse block 1: F01BIATTNTT0000000000 (flexible length)"""
+        sub = {}
+        v = value.strip()
+        # Format: AppId(1) + ServiceId(2) + LT(8-12) + Session(4) + Seq(2-6)
+        # Try strict first, then flexible
+        m = re.match(r'^([A-Z])(\d{2})([A-Z0-9]{8,12})(\d{2,4})(\d{2,6})$', v)
+        if m:
+            sub["ApplicationIdentifier"] = {"format": "1!a", "value": m.group(1), "description": "F=FIN Application"}
+            sub["ServiceIdentifier"]     = {"format": "2!n", "value": m.group(2), "description": "Service Identifier"}
+            sub["LogicalTerminalAddress"]= {"format": "12!c","value": m.group(3), "description": "BIC Logical Terminal"}
+            sub["SessionNumber"]         = {"format": "4!n", "value": m.group(4), "description": "Session Number"}
+            sub["SequenceNumber"]        = {"format": "6!n", "value": m.group(5), "description": "Sequence Number"}
+        else:
+            # Manual split: 1 + 2 + rest split as LT(12) + Session(4) + Seq(rest)
+            try:
+                from collections import OrderedDict
+                sub = OrderedDict()
+                app_id = v[0]
+                svc_id = v[1:3]
+                remaining = v[3:]
+                if len(remaining) >= 6:
+                    lt_addr = remaining[:12] if len(remaining) >= 12 else remaining[:8]
+                    rest = remaining[len(lt_addr):]
+                    session = rest[:4] if len(rest) >= 4 else rest
+                    seq = rest[4:] if len(rest) > 4 else "000000"
+                    sub["ApplicationIdentifier"] = {"format": "1!a", "value": app_id, "description": "F=FIN Application"}
+                    sub["ServiceIdentifier"]     = {"format": "2!n", "value": svc_id, "description": "Service Identifier"}
+                    sub["LogicalTerminalAddress"]= {"format": "12!c","value": lt_addr, "description": "BIC Logical Terminal"}
+                    sub["SessionNumber"]         = {"format": "4!n", "value": session, "description": "Session Number"}
+                    sub["SequenceNumber"]        = {"format": "6!n", "value": seq or "000000", "description": "Sequence Number"}
+                else:
+                    sub["Value"] = {"format": "25!x", "value": v}
+            except Exception:
+                sub["Value"] = {"format": "25!x", "value": v}
+        return sub
+
+    def _parse_block2_input(self, value: str) -> Dict[str, Any]:
+        """Parse block 2 input: I202BNPAFRPPXXXXN"""
+        sub = {}
+        m = re.match(r'^I(\d{3})([A-Z0-9]{12})([A-Z]?)$', value.strip())
+        if m:
+            sub["InputOutputIdentifier"] = {"format": "1!a", "value": "I",       "description": "I=Input message"}
+            sub["MessageType"]           = {"format": "3!n", "value": m.group(1), "description": "SWIFT Message Type"}
+            sub["DestinationAddress"]    = {"format": "12!c","value": m.group(2), "description": "Destination BIC"}
+            if m.group(3):
+                sub["Priority"] = {"format": "1!a", "value": m.group(3), "description": "N=Normal U=Urgent"}
+        else:
+            sub["Value"] = {"format": "35x", "value": value}
+        return sub
+
+    def _parse_block2_output(self, value: str) -> Dict[str, Any]:
+        """Parse block 2 output: O202HHMM YYMMDD BIC SESSION SEQ YYMMDD HHMM P"""
+        sub = {}
+        m = re.match(r'^O(\d{3})(\d{4})(\d{6})([A-Z0-9]{12})(\d{4})(\d{6})(\d{6})(\d{4})([A-Z]?)$', value.strip())
+        if m:
+            sub["InputOutputIdentifier"] = {"format": "1!a", "value": "O",        "description": "O=Output message"}
+            sub["MessageType"]           = {"format": "3!n", "value": m.group(1), "description": "SWIFT Message Type"}
+            sub["InputTime"]             = {"format": "4!n", "value": m.group(2), "description": "Input Time HHMM"}
+            sub["InputDate"]             = {"format": "6!n", "value": m.group(3), "description": "Input Date YYMMDD"}
+            sub["LogicalTerminalAddress"]= {"format": "12!c","value": m.group(4), "description": "Input LT Address"}
+            sub["SessionNumber"]         = {"format": "4!n", "value": m.group(5), "description": "Session Number"}
+            sub["SequenceNumber"]        = {"format": "6!n", "value": m.group(6), "description": "Sequence Number"}
+            sub["OutputDate"]            = {"format": "6!n", "value": m.group(7), "description": "Output Date YYMMDD"}
+            sub["OutputTime"]            = {"format": "4!n", "value": m.group(8), "description": "Output Time HHMM"}
+        else:
+            sub["Value"] = {"format": "35x", "value": value}
+        return sub
 
     # ── Step 9: Build columns and sample ─────────────────────────────────────
 
