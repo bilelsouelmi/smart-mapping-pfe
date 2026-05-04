@@ -128,6 +128,7 @@ const MessageDescriptionPage = () => {
     setElements([]);
     setUploadedFile(null);
     sessionStorage.removeItem('md_page_state');
+    sessionStorage.removeItem('validate_page_state'); 
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
