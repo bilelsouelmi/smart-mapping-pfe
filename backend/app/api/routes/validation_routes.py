@@ -85,16 +85,54 @@ async def import_rules_from_md(
             return NAME_TO_TAG[elem.name]
         return None
 
+    # Multiline fields — their max_length should be multiplied
+    MULTILINE_FIELDS = {
+        'Ordering Customer', 'Beneficiary Customer', 'Beneficiary Institution',
+        'Remittance Information', 'Sender to Receiver Information',
+        'Information to Account Owner', 'Statement Line',
+        'Ordering Institution', 'Intermediary Institution',
+        'Account With Institution'
+    }
+
+    # Fields with compound formats that may exceed simple max_length
+    # e.g. :28C = 5!n/3!n = "00001/001" = 9 chars
+    COMPOUND_FIELDS = {
+        'Statement Number': 12,       # 5!n/3!n
+        'Opening Balance': 25,        # C/D + 6n + 3a + 15d
+        'Closing Balance': 25,
+        'Intermediate Opening Balance': 25,
+        'Intermediate Closing Balance': 25,
+    }
+
+    # Track added tags to handle duplicates like :61_1 → add :61 rule too
+    added_tags = set()
+
     created = 0
     for elem in elements:
+        block_name = _get_block_name(elem, elements)
+        field_tag = get_field_tag(elem)
+
+        # Fix max_length for multiline fields
+        max_length = elem.max_length
+        if elem.name in MULTILINE_FIELDS:
+            max_length = max(max_length or 35, 140)
+        elif elem.name in COMPOUND_FIELDS:
+            max_length = max(max_length or 0, COMPOUND_FIELDS[elem.name])
+
+        # Use example_value length as minimum max_length
+        if elem.example_value and max_length:
+            max_length = max(max_length, len(str(elem.example_value)) + 10)
+        elif elem.example_value and not max_length:
+            max_length = max(35, len(str(elem.example_value)) + 10)
+
         rule = ValidationRule(
             mt_type=md.mt_type,
-            block_name=_get_block_name(elem, elements),
-            field_tag=get_field_tag(elem),
+            block_name=block_name,
+            field_tag=field_tag,
             field_name=elem.name,
             mandatory=elem.mandatory if elem.mandatory is not None else False,
             min_length=elem.min_length,
-            max_length=elem.max_length,
+            max_length=max_length,
             fin_format=elem.fin_format,
             pattern=elem.pattern,
             element_type=elem.element_type,
@@ -102,6 +140,27 @@ async def import_rules_from_md(
         )
         db.add(rule)
         created += 1
+
+        # For duplicate tags like :61_1, :86_1 → also add rule for base tag :61, :86
+        if field_tag and re.search(r'_\d+$', field_tag):
+            base_tag = re.sub(r'_\d+$', '', field_tag)
+            if base_tag not in added_tags:
+                added_tags.add(base_tag)
+                base_rule = ValidationRule(
+                    mt_type=md.mt_type,
+                    block_name=block_name,
+                    field_tag=base_tag,
+                    field_name=elem.name,
+                    mandatory=False,  # duplicates are optional
+                    min_length=elem.min_length,
+                    max_length=max_length,
+                    fin_format=elem.fin_format,
+                    pattern=elem.pattern,
+                    element_type=elem.element_type,
+                    description=elem.description
+                )
+                db.add(base_rule)
+                created += 1
 
     db.commit()
     return {"message": f"Imported {created} validation rules for {md.mt_type}", "count": created}
@@ -325,6 +384,14 @@ def _validate_field(rule: ValidationRule, value) -> List[str]:
     """Validate a single field value against its rule. Returns list of error messages."""
     errors = []
 
+    # Skip validation for COMPOSITE parent blocks — only validate leaf fields
+    if rule.element_type == 'COMPOSITE':
+        return []
+
+    # Skip validation for block-level entries (block1, block2, block4...)
+    if rule.field_name in ('block1', 'block2', 'block2Input', 'block2Output', 'block3', 'block4', 'block5'):
+        return []
+
     # 1. PRESENCE check
     if rule.mandatory and (value is None or value == ""):
         errors.append(f"Field is mandatory but missing")
@@ -335,16 +402,36 @@ def _validate_field(rule: ValidationRule, value) -> List[str]:
 
     str_val = str(value).strip()
 
-    # 2. LENGTH check
-    if rule.min_length is not None and len(str_val) < rule.min_length:
-        errors.append(f"Value too short: {len(str_val)} < {rule.min_length} (min)")
+    # 2. LENGTH check — use min_length/max_length if available
+    # Only use fin_format length if min/max not explicitly set
+    effective_min = rule.min_length
+    effective_max = rule.max_length
 
-    if rule.max_length is not None and len(str_val) > rule.max_length:
-        errors.append(f"Value too long: {len(str_val)} > {rule.max_length} (max)")
+    # If fin_format defines length but min/max conflict, prefer min/max
+    if rule.fin_format and (effective_min is None and effective_max is None):
+        # Extract length from fin_format as fallback
+        import re as _re
+        m = _re.match(r'^(\d+)(!?)([a-zA-Z])$', rule.fin_format.strip())
+        if m:
+            length = int(m.group(1))
+            exact = m.group(2) == '!'
+            if exact:
+                effective_min = length
+                effective_max = length
+            else:
+                effective_max = length
 
-    # 3. FIN FORMAT check
-    if rule.fin_format:
-        fmt_error = _check_fin_format(str_val, rule.fin_format)
+    if effective_min is not None and len(str_val) < effective_min:
+        errors.append(f"Value too short: {len(str_val)} < {effective_min} (min)")
+
+    if effective_max is not None and len(str_val) > effective_max:
+        errors.append(f"Value too long: {len(str_val)} > {effective_max} (max)")
+
+    # 3. FIN FORMAT check — only for block4 fields (not header blocks)
+    # Skip fin_format check for header block sub-fields to avoid false positives
+    if rule.fin_format and rule.block_name not in ('block1', 'block2', 'block3', 'block5'):
+        # Only check character type, not length (length already checked above)
+        fmt_error = _check_fin_format_type_only(str_val, rule.fin_format)
         if fmt_error:
             errors.append(fmt_error)
 
@@ -356,13 +443,32 @@ def _validate_field(rule: ValidationRule, value) -> List[str]:
         except re.error:
             pass  # Invalid regex — skip
 
-    # 5. TYPE check
-    if rule.element_type:
+    # 5. TYPE check — only for numeric/date types
+    if rule.element_type and rule.element_type in ('INTEGER', 'DECIMAL', 'DATE'):
         type_error = _check_type(str_val, rule.element_type)
         if type_error:
             errors.append(type_error)
 
     return errors
+
+
+def _check_fin_format_type_only(value: str, fin_format: str) -> str:
+    """Check only character type from fin_format, not length."""
+    try:
+        m = re.match(r'^(\d+)(!?)([a-zA-Z])$', fin_format.strip())
+        if not m:
+            return None
+        ftype = m.group(3).lower()
+        if ftype == 'n' and not value.isdigit():
+            return f"Expected numeric value (fin_format: {fin_format}), got '{value}'"
+        elif ftype == 'a' and not value.isalpha():
+            return f"Expected alphabetic value (fin_format: {fin_format}), got '{value}'"
+        elif ftype == 'd':
+            if not re.match(r'^\d+,?\d*$', value):
+                return f"Expected decimal value (fin_format: {fin_format}), got '{value}'"
+    except Exception:
+        pass
+    return None
 
 
 def _check_fin_format(value: str, fin_format: str) -> str:
