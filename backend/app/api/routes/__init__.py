@@ -1,5 +1,7 @@
 from fastapi import APIRouter
 from app.api.routes import auth, users, files, message_descriptions, mapping_formulas, transform, standard_elements
+from app.api.routes.validation_routes import router as validation_router
+
 
 api_router = APIRouter()
 
@@ -15,3 +17,4 @@ api_router.include_router(message_descriptions.router, prefix="/message-descript
 api_router.include_router(mapping_formulas.router, prefix="/mapping-formulas", tags=["mapping-formulas"])
 api_router.include_router(transform.router, prefix="/transform", tags=["transform"])
 api_router.include_router(standard_elements.router, prefix="/standard-elements", tags=["standard-elements"])
+api_router.include_router(validation_router, prefix="/validation", tags=["validation"])

@@ -1,7 +1,7 @@
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Home, Upload, Link2, FileOutput, LogOut, Sparkles, Database, Search, Layers } from 'lucide-react';
+import { Home, Upload, Link2, FileOutput, LogOut, Sparkles, Database, Search, Layers, Shield } from 'lucide-react';
 
 const Layout = ({ children }) => {
   const { user, logout } = useAuth();
@@ -21,6 +21,7 @@ const Layout = ({ children }) => {
     { path: '/mappings', icon: Link2, label: 'Mappings' },
     { path: '/outputs', icon: FileOutput, label: 'Outputs' },
     { path: '/rag-search', icon: Search, label: 'RAG Search' },
+    { path: '/validate', icon: Shield, label: 'Validate' },
   ];
 
   return (
@@ -73,11 +74,19 @@ const Layout = ({ children }) => {
                     style={{
                       display: 'flex', alignItems: 'center', gap: '0.4rem',
                       padding: '0.6rem 1rem', borderRadius: '12px',
-                      background: isActive ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' : 'rgba(255, 255, 255, 0.05)',
+                      background: isActive
+                        ? item.path === '/validate'
+                          ? 'linear-gradient(135deg, #10b981 0%, #06b6d4 100%)'
+                          : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
+                        : 'rgba(255, 255, 255, 0.05)',
                       color: 'white', border: '1px solid',
                       borderColor: isActive ? 'transparent' : 'rgba(255, 255, 255, 0.1)',
                       transition: 'all 0.3s ease', cursor: 'pointer',
-                      boxShadow: isActive ? '0 4px 20px rgba(102, 126, 234, 0.4)' : 'none'
+                      boxShadow: isActive
+                        ? item.path === '/validate'
+                          ? '0 4px 20px rgba(16, 185, 129, 0.4)'
+                          : '0 4px 20px rgba(102, 126, 234, 0.4)'
+                        : 'none'
                     }}
                   >
                     <Icon size={16} />

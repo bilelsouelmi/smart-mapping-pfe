@@ -9,8 +9,9 @@ import DashboardPage from './pages/DashboardPage';
 import UploadPage from './pages/UploadPage';
 import MappingsPage from './pages/MappingsPage';
 import OutputsPage from './pages/OutputsPage';
-import RAGSearch from './pages/RAGSearch';  // ← AJOUTÉ
+import RAGSearch from './pages/RAGSearch';
 import MessageDescriptionPage from './pages/MessageDescriptionPage';
+import ValidatePage from './pages/ValidatePage';
 
 
 // Protected Route Component
@@ -81,7 +82,7 @@ function App() {
               </ProtectedRoute>
             }
           />
-          {/* ← AJOUTÉ : RAG Search Route */}
+          {/* RAG Search Route */}
           <Route
             path="/rag-search"
             element={
@@ -98,7 +99,15 @@ function App() {
               </ProtectedRoute>
             }
           />
-          
+          {/* Validate Route */}
+          <Route
+            path="/validate"
+            element={
+              <ProtectedRoute>
+                <ValidatePage />
+              </ProtectedRoute>
+            }
+          />
 
           {/* Redirect root to dashboard or login */}
           <Route path="/" element={<Navigate to="/dashboard" />} />

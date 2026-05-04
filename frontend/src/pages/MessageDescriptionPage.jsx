@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChevronDown, ChevronRight, Plus, Edit2, Trash2, RefreshCw, FileText, Layers, X, Check, Upload } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus, Edit2, Trash2, RefreshCw, FileText, Layers, X, Check, Upload, Shield } from 'lucide-react';
 import Layout from '../components/Layout';
 
 const API = 'http://localhost:8000/api';
@@ -28,6 +28,7 @@ const MessageDescriptionPage = () => {
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [uploadedFile, setUploadedFile] = useState(null);
+  const [settingStandard, setSettingStandard] = useState(false);
   const fileInputRef = useRef(null);
 
   // Restore state from sessionStorage on mount
@@ -108,6 +109,18 @@ const MessageDescriptionPage = () => {
     } catch (e) {
       alert(e.response?.data?.detail || 'Parse failed');
     } finally { setImporting(false); }
+  };
+
+  const handleSetAsStandard = async () => {
+    if (!selectedMD) return;
+    if (!window.confirm(`Set ${selectedMD.mt_type || selectedMD.file_name} as the standard reference for validation?`)) return;
+    setSettingStandard(true);
+    try {
+      const r = await axios.post(`${API}/validation/validation-rules/import-from-md/${selectedMD.id}`);
+      alert(`✅ ${r.data.message}`);
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Failed to set as standard');
+    } finally { setSettingStandard(false); }
   };
 
   const handleNewFile = () => {
@@ -265,6 +278,14 @@ const MessageDescriptionPage = () => {
                       label="Add Element"
                       color="#667eea"
                       onClick={() => handleOpenCreate(null)}
+                    />
+                    {/* Set as Standard */}
+                    <ActionBtn
+                      icon={<Shield size={14} />}
+                      label={settingStandard ? 'Setting...' : 'Set as Standard'}
+                      color="#10b981"
+                      onClick={handleSetAsStandard}
+                      disabled={settingStandard || elements.length === 0}
                     />
                     {/* New File */}
                     <ActionBtn
