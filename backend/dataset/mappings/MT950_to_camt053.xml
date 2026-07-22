@@ -1,0 +1,541 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MessageMapping version="1.0">
+
+  <!-- ============================================= -->
+  <!-- GENERAL INFORMATION -->
+  <!-- ============================================= -->
+  <GeneralInformation>
+    <MappingId>MAP_MT950_CAMT053_001</MappingId>
+    <MappingName>MT950 to camt.053 Conversion</MappingName>
+    <Version>2.0.0</Version>
+    <CreatedDate>2026-06-08</CreatedDate>
+    <CreatedBy>Bilel SOUELMI - Vermeg FinTech Team</CreatedBy>
+    <LastModifiedDate>2026-07-15</LastModifiedDate>
+    <Status>ACTIVE</Status>
+
+    <BusinessContext>
+      <Description>
+        Converts SWIFT MT950 (Statement Message) to ISO 20022 camt.053.001.08
+        (BankToCustomerStatement). MT950 is the interbank/nostro-vostro variant
+        of the customer statement, sent between correspondent banks (unlike MT940
+        which is sent to the account-owning customer). Structurally near-identical
+        to MT940 but does not carry field :86: (Information to Account Owner) —
+        MT950 is a simplified statement intended for bank-to-bank reconciliation
+        rather than customer-facing detail.
+      </Description>
+      <UseCases>
+        <UseCase>Nostro/Vostro account statement reconciliation between correspondent banks</UseCase>
+        <UseCase>Interbank cash position reporting</UseCase>
+        <UseCase>End-of-day settlement verification</UseCase>
+        <UseCase>Treasury liquidity monitoring across correspondent accounts</UseCase>
+      </UseCases>
+      <ApplicableDomains>Correspondent Banking, Treasury Operations, Nostro Reconciliation, Cash Management</ApplicableDomains>
+    </BusinessContext>
+
+    <TechnicalSpecifications>
+      <SourceFormat>SWIFT MT950 (ISO 15022 — Category 9)</SourceFormat>
+      <TargetFormat>ISO 20022 camt.053.001.08 (XML)</TargetFormat>
+      <ProcessingMode>BATCH (end-of-day statement generation)</ProcessingMode>
+      <AverageProcessingTime>400ms per statement</AverageProcessingTime>
+      <KeyDifference>
+        MT950 has no field :86: (no free-text remittance detail per entry) — this is
+        the main structural difference from MT940. Statement lines (:61:) are present
+        but their corresponding camt.053 entries carry no RmtInf/Ustrd content, since
+        MT950 is a summary interbank statement rather than a customer-facing detailed one.
+      </KeyDifference>
+    </TechnicalSpecifications>
+
+    <ComplianceRequirements>
+      <Regulation>SWIFT Standards MT950 Usage Guidelines</Regulation>
+      <Regulation>ISO 20022 camt.053.001.08 Implementation Guidelines</Regulation>
+      <Regulation>GDPR — Financial Institution Data Protection</Regulation>
+      <Regulation>SOX — Financial Controls and Statement Accuracy</Regulation>
+      <Regulation>Basel III Intraday Liquidity Monitoring (BCBS 248)</Regulation>
+    </ComplianceRequirements>
+
+    <GlobalVariables>
+      <Variable name="MAX_MSG_ID_LENGTH" value="35" type="INTEGER" description="Maximum length of camt.053 MsgId"/>
+      <Variable name="MAX_REF_LENGTH" value="16" type="INTEGER" description="Maximum length of MT950 reference fields"/>
+      <Variable name="CENTURY_CUTOFF_YEAR" value="50" type="INTEGER" description="2-digit year cutoff for date conversion"/>
+      <Variable name="OPENING_BALANCE_CODE" value="OPBD" type="STRING" description="ISO 20022 balance type code for opening balance"/>
+      <Variable name="CLOSING_BALANCE_CODE" value="CLBD" type="STRING" description="ISO 20022 balance type code for closing balance"/>
+      <Variable name="AUDIT_RETENTION_YEARS" value="7" type="INTEGER" description="Regulatory minimum audit log retention"/>
+      <Variable name="PROCESSING_TIMEZONE" value="UTC" type="STRING" description="All timestamps in UTC"/>
+      <Variable name="IBAN_PATTERN" value="^[A-Z]{2}\d{2}[A-Z0-9]+$" type="STRING" description="IBAN detection regex"/>
+      <Variable name="DEFAULT_TX_CODE" value="NTRN" type="STRING" description="Default SWIFT transaction type code when not specified in field :61:"/>
+    </GlobalVariables>
+  </GeneralInformation>
+
+  <!-- ============================================= -->
+  <!-- SOURCE MESSAGE STRUCTURE (MT950) -->
+  <!-- ============================================= -->
+  <SourceMessage>
+    <MessageType>MT950</MessageType>
+    <MessageName>Statement Message</MessageName>
+    <Standard>SWIFT ISO 15022 — Category 9</Standard>
+    <MessagePurpose>
+      Interbank statement sent between correspondent banks for nostro/vostro
+      account reconciliation. Structurally similar to MT940 but without field
+      :86: — intended for bank-to-bank reconciliation, not customer delivery.
+    </MessagePurpose>
+
+    <Fields>
+
+      <Field id="FIELD_01">
+        <FieldTag>:20:</FieldTag>
+        <FieldName>Transaction Reference Number</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>16</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Description>Unique reference of the statement message</Description>
+        <ExampleValue>STMT20260608001</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_02">
+        <FieldTag>:25:</FieldTag>
+        <FieldName>Account Identification</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>35</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Description>Identification of the nostro/vostro account being reported</Description>
+        <ExampleValue>FR7630006000011234567890189</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_03">
+        <FieldTag>:28C:</FieldTag>
+        <FieldName>Statement Number / Sequence Number</FieldName>
+        <DataType>COMPOSITE</DataType>
+        <Format>5n[/2n]</Format>
+        <Mandatory>true</Mandatory>
+        <Description>Sequential statement number and optional page sequence</Description>
+        <ExampleValue>00017/01</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_04">
+        <FieldTag>:60F:</FieldTag>
+        <FieldName>Opening Balance</FieldName>
+        <DataType>COMPOSITE</DataType>
+        <Format>1!a6!n3!a15d</Format>
+        <Mandatory>true</Mandatory>
+        <Description>Debit/credit mark, date, currency and amount of opening balance</Description>
+        <ExampleValue>C260608USD500000,00</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_05">
+        <FieldTag>:61:</FieldTag>
+        <FieldName>Statement Line</FieldName>
+        <DataType>COMPOSITE</DataType>
+        <Format>6!n[4!n]2a[1!a]15d1!a3!c16x[//16x][34x]</Format>
+        <Mandatory>false</Mandatory>
+        <Description>Individual interbank transaction entry — value date, entry date, D/C mark, amount, transaction type, reference</Description>
+        <ExampleValue>2606080608C250000,00NTRNTRXREF200//REF456</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_06">
+        <FieldTag>:62F:</FieldTag>
+        <FieldName>Closing Balance</FieldName>
+        <DataType>COMPOSITE</DataType>
+        <Format>1!a6!n3!a15d</Format>
+        <Mandatory>true</Mandatory>
+        <Description>Debit/credit mark, date, currency and amount of closing balance</Description>
+        <ExampleValue>C260608USD750000,00</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_07">
+        <FieldTag>:64:</FieldTag>
+        <FieldName>Closing Available Balance</FieldName>
+        <DataType>COMPOSITE</DataType>
+        <Format>1!a6!n3!a15d</Format>
+        <Mandatory>false</Mandatory>
+        <Description>Funds available for immediate use, distinct from closing book balance</Description>
+        <ExampleValue>C260608USD745000,00</ExampleValue>
+      </Field>
+
+    </Fields>
+  </SourceMessage>
+
+  <!-- ============================================= -->
+  <!-- TARGET MESSAGE STRUCTURE (camt.053) -->
+  <!-- ============================================= -->
+  <TargetMessage>
+    <MessageType>camt.053.001.08</MessageType>
+    <MessageName>BankToCustomerStatement</MessageName>
+    <Standard>ISO 20022</Standard>
+    <Namespace>urn:iso:std:iso:20022:tech:xsd:camt.053.001.08</Namespace>
+
+    <Fields>
+
+      <Field id="FIELD_01">
+        <XPath>/Document/BkToCstmrStmt/GrpHdr/MsgId</XPath>
+        <FieldName>Message Identification</FieldName>
+        <Mandatory>true</Mandatory>
+        <ExampleValue>STMT20260608001</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_02">
+        <XPath>/Document/BkToCstmrStmt/GrpHdr/CreDtTm</XPath>
+        <FieldName>Creation Date Time</FieldName>
+        <Mandatory>true</Mandatory>
+        <ExampleValue>2026-06-08T23:59:00Z</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_03">
+        <XPath>/Document/BkToCstmrStmt/Stmt/Id</XPath>
+        <FieldName>Statement Identification</FieldName>
+        <Mandatory>true</Mandatory>
+        <ExampleValue>STMT20260608001</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_04">
+        <XPath>/Document/BkToCstmrStmt/Stmt/ElctrncSeqNb</XPath>
+        <FieldName>Electronic Sequence Number</FieldName>
+        <Mandatory>true</Mandatory>
+        <ExampleValue>17</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_05">
+        <XPath>/Document/BkToCstmrStmt/Stmt/Acct/Id/IBAN</XPath>
+        <FieldName>Account IBAN</FieldName>
+        <Mandatory>true</Mandatory>
+        <ExampleValue>FR7630006000011234567890189</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_06">
+        <XPath>/Document/BkToCstmrStmt/Stmt/Bal[Tp/CdOrPrtry/Cd='OPBD']</XPath>
+        <FieldName>Opening Balance</FieldName>
+        <Mandatory>true</Mandatory>
+        <ExampleValue>CRDT 500000.00 USD 2026-06-08</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_07">
+        <XPath>/Document/BkToCstmrStmt/Stmt/Ntry</XPath>
+        <FieldName>Statement Entry</FieldName>
+        <Mandatory>false</Mandatory>
+        <ExampleValue>Entry with Amt, CdtDbtInd, ValDt, BookgDt — no RmtInf (MT950 has no :86:)</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_08">
+        <XPath>/Document/BkToCstmrStmt/Stmt/Bal[Tp/CdOrPrtry/Cd='CLBD']</XPath>
+        <FieldName>Closing Balance</FieldName>
+        <Mandatory>true</Mandatory>
+        <ExampleValue>CRDT 750000.00 USD 2026-06-08</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_09">
+        <XPath>/Document/BkToCstmrStmt/Stmt/Bal[Tp/CdOrPrtry/Cd='CLAV']</XPath>
+        <FieldName>Closing Available Balance</FieldName>
+        <Mandatory>false</Mandatory>
+        <ExampleValue>CRDT 745000.00 USD 2026-06-08</ExampleValue>
+      </Field>
+
+    </Fields>
+  </TargetMessage>
+
+  <!-- ============================================= -->
+  <!-- FIELD MAPPINGS -->
+  <!-- ============================================= -->
+  <!-- NOTE ON THIS REVISION (v2.0.0): PseudoCode blocks simplified to
+       short, executable formulas per supervisor review, using the same
+       Stmt/Bal/Ntry structure as MT940_to_camt053.xml. KEY DIFFERENCE:
+       no mapping for field :86: since MT950 does not carry it — statement
+       entries here have no RmtInf/Ustrd content, unlike MT940's MAPPING_07. -->
+  <FieldMappings>
+
+    <!-- ==================== MAPPING 01 ==================== -->
+    <Mapping id="MAPPING_01">
+      <SourceField ref="FIELD_01"/>
+      <TargetFields>
+        <TargetField ref="FIELD_01"/>
+        <TargetField ref="FIELD_03"/>
+      </TargetFields>
+      <MappingFormula>
+        <Type>ONE_TO_TWO_DIRECT_COPY</Type>
+        <Expression>GrpHdr.MsgId = Stmt.Id = MT.F20.trim()</Expression>
+        <PseudoCode>
+          GrpHdr.MsgId = MT.F20.trim()
+          Stmt.Id = MT.F20.trim()
+        </PseudoCode>
+      </MappingFormula>
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_20 != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Missing mandatory field :20:"</ElseAction>
+        </Condition>
+      </Conditions>
+      <GlobalVariables>
+        <Variable ref="MAX_MSG_ID_LENGTH"/>
+        <Variable ref="MAX_REF_LENGTH"/>
+      </GlobalVariables>
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>Statement unidentifiable, schema validation fails</ImpactIfFails>
+        <BusinessRationale>Reference identifies both the overall message and the statement itself — identical pattern to MT940</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (direct copy)</PerformanceImpact>
+        <AuditRequirement>Statement reference logged for interbank reconciliation audit trail.</AuditRequirement>
+        <ComplianceRequirement>MsgId and Stmt/Id mandatory per camt.053 schema.</ComplianceRequirement>
+        <DataPrivacy>No PII — operational identifier.</DataPrivacy>
+        <MigrationNote>MT950 field :20: fits within camt.053 Max35Text without truncation. Same logic as MT940 MAPPING_01.</MigrationNote>
+        <CachingStrategy>No caching.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 02 ==================== -->
+    <Mapping id="MAPPING_02">
+      <SourceField ref="NONE"/>
+      <TargetField ref="FIELD_02"/>
+      <MappingFormula>
+        <Type>SYSTEM_GENERATED</Type>
+        <Expression>GrpHdr.CreDtTm = now("yyyy-MM-dd'T'HH:mm:ss'Z'")</Expression>
+        <PseudoCode>
+          GrpHdr.CreDtTm = now("yyyy-MM-dd'T'HH:mm:ss'Z'")
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Schema validation failure — GrpHdr/CreDtTm mandatory.</ImpactIfFails>
+        <BusinessRationale>Mandatory camt.053 header field. No MT950 equivalent.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <AuditRequirement>Conversion timestamp logged for SLA monitoring.</AuditRequirement>
+        <ComplianceRequirement>Mandatory per camt.053 schema.</ComplianceRequirement>
+        <DataPrivacy>No PII.</DataPrivacy>
+        <MigrationNote>Generated at conversion time, always UTC. Same as MT940 MAPPING_02.</MigrationNote>
+        <CachingStrategy>Not applicable.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 03 ==================== -->
+    <Mapping id="MAPPING_03">
+      <SourceField ref="FIELD_02"/>
+      <TargetField ref="FIELD_05"/>
+      <MappingFormula>
+        <Type>EXTRACTION</Type>
+        <Expression>Acct.Id.IBAN = extractIBAN(MT.F25)</Expression>
+        <PseudoCode>
+          account_string = trim(MT.F25)
+          if(isIBAN(account_string)) Acct.Id.IBAN = account_string
+          if(!isIBAN(account_string)) Acct.Id.Othr.Id = account_string
+        </PseudoCode>
+      </MappingFormula>
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_25 != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Missing mandatory field :25:"</ElseAction>
+        </Condition>
+      </Conditions>
+      <GlobalVariables>
+        <Variable ref="IBAN_PATTERN"/>
+      </GlobalVariables>
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Statement for wrong nostro/vostro account — interbank reconciliation failure</ImpactIfFails>
+        <BusinessRationale>Account identification is mandatory for correspondent banking reconciliation</BusinessRationale>
+        <PerformanceImpact>LOW (regex match)</PerformanceImpact>
+        <AuditRequirement>Account ID logged. Retention: AUDIT_RETENTION_YEARS years.</AuditRequirement>
+        <ComplianceRequirement>Account identification required per correspondent banking agreements and banking secrecy laws.</ComplianceRequirement>
+        <DataPrivacy>IBAN is financial PII. Must be masked in logs per GDPR Article 25.</DataPrivacy>
+        <MigrationNote>MT950 field :25: format identical to MT940. Same isIBAN() dispatch logic applies.</MigrationNote>
+        <CachingStrategy>No caching.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 04 ==================== -->
+    <Mapping id="MAPPING_04">
+      <SourceField ref="FIELD_03"/>
+      <TargetField ref="FIELD_04"/>
+      <MappingFormula>
+        <Type>EXTRACTION</Type>
+        <Expression>Stmt.ElctrncSeqNb = extractStatementNumber(MT.F28C)</Expression>
+        <PseudoCode>
+          field_28c = trim(MT.F28C)
+          if(contains(field_28c, "/")) stmt_num_str = substring_before(field_28c, "/")
+          if(!contains(field_28c, "/")) stmt_num_str = field_28c
+          Stmt.ElctrncSeqNb = to_integer(stmt_num_str)
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>Statement sequence tracking broken — duplicate/missing statement detection fails between correspondent banks</ImpactIfFails>
+        <BusinessRationale>Statement number enables correspondent banks to detect missing statements in sequence</BusinessRationale>
+        <PerformanceImpact>LOW (string parsing)</PerformanceImpact>
+        <AuditRequirement>Statement sequence logged for gap detection.</AuditRequirement>
+        <ComplianceRequirement>Sequential statement numbering required for audit trail completeness.</ComplianceRequirement>
+        <DataPrivacy>No PII.</DataPrivacy>
+        <MigrationNote>MT950 field :28C: format identical to MT940 — NNNNN/NN, only statement number component maps to ElctrncSeqNb (integer).</MigrationNote>
+        <CachingStrategy>No caching.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 05 ==================== -->
+    <Mapping id="MAPPING_05">
+      <SourceField ref="FIELD_04"/>
+      <TargetField ref="FIELD_06"/>
+      <MappingFormula>
+        <Type>COMPOSITE_SPLIT</Type>
+        <Expression>Bal[OPBD].Amt = decimal(MT.F60F.amount.replace(",","."))</Expression>
+        <PseudoCode>
+          dc_mark = substring(MT.F60F, 1, 1)
+          date_str = substring(MT.F60F, 2, 6)
+          currency = substring(MT.F60F, 8, 3)
+          amount_str = substring(MT.F60F, 11)
+          Bal_OPBD.Tp.CdOrPrtry.Cd = OPENING_BALANCE_CODE
+          Bal_OPBD.Amt = decimal(amount_str.replace(",","."))
+          Bal_OPBD.CdtDbtInd = (dc_mark == "C") ? "CRDT" : "DBIT"
+          Bal_OPBD.Dt.Dt = expandCentury(date_str, "yyMMdd", CENTURY_CUTOFF_YEAR)
+        </PseudoCode>
+      </MappingFormula>
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_60F != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Missing mandatory field :60F:"</ElseAction>
+        </Condition>
+      </Conditions>
+      <GlobalVariables>
+        <Variable ref="OPENING_BALANCE_CODE"/>
+        <Variable ref="CENTURY_CUTOFF_YEAR"/>
+      </GlobalVariables>
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Interbank statement balance incorrect — nostro/vostro accounting discrepancy</ImpactIfFails>
+        <BusinessRationale>Opening balance is the starting reference point for interbank statement period reconciliation</BusinessRationale>
+        <PerformanceImpact>LOW (string parsing)</PerformanceImpact>
+        <AuditRequirement>Balance amounts logged for SOX financial controls.</AuditRequirement>
+        <ComplianceRequirement>Accurate opening balance mandatory for correspondent banking statement completeness.</ComplianceRequirement>
+        <DataPrivacy>Financial amount data. Access restricted.</DataPrivacy>
+        <MigrationNote>Identical parsing logic to MT940 MAPPING_05 — same SWIFT balance composite format.</MigrationNote>
+        <CachingStrategy>No caching.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 06 ==================== -->
+    <Mapping id="MAPPING_06">
+      <SourceField ref="FIELD_05"/>
+      <TargetField ref="FIELD_07"/>
+      <MappingFormula>
+        <Type>COMPOSITE_SPLIT</Type>
+        <Expression>Ntry.Amt = decimal(MT.F61.amount)</Expression>
+        <PseudoCode>
+          Ntry.Amt = decimal(MT.F61.amount)
+          Ntry.CdtDbtInd = (MT.F61.dcmark == "C" OR MT.F61.dcmark == "R") ? "CRDT" : "DBIT"
+          Ntry.ValDt.Dt = expandCentury(MT.F61.date, "yyMMdd", CENTURY_CUTOFF_YEAR)
+        </PseudoCode>
+      </MappingFormula>
+      <Conditions>
+        <Condition priority="1">
+          <Type>NO_REMITTANCE_INFO</Type>
+          <Expression>true</Expression>
+          <Action>DO NOT populate RmtInf/Ustrd — MT950 carries no field :86:, unlike MT940</Action>
+          <ElseAction>N/A</ElseAction>
+        </Condition>
+      </Conditions>
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>Individual interbank transaction line missing or incorrect in statement</ImpactIfFails>
+        <BusinessRationale>Statement line parses to individual entry for interbank reconciliation — same complex composite as MT940 :61:</BusinessRationale>
+        <PerformanceImpact>MEDIUM (complex parsing per entry)</PerformanceImpact>
+        <AuditRequirement>Each entry logged for transaction-level audit trail.</AuditRequirement>
+        <ComplianceRequirement>Complete transaction detail required for statement accuracy per SOX.</ComplianceRequirement>
+        <DataPrivacy>Transaction data may reference counterparties — treat as sensitive.</DataPrivacy>
+        <MigrationNote>KEY DIFFERENCE from MT940: no corresponding :86: field exists in MT950, so the resulting camt.053 Ntry has no NtryDtls/TxDtls/RmtInf/Ustrd content — the entry carries only the core :61: data (amount, date, indicator).</MigrationNote>
+        <CachingStrategy>No caching — parsed per entry.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 07 ==================== -->
+    <Mapping id="MAPPING_07">
+      <SourceField ref="FIELD_06"/>
+      <TargetField ref="FIELD_08"/>
+      <MappingFormula>
+        <Type>COMPOSITE_SPLIT</Type>
+        <Expression>Bal[CLBD].Amt = decimal(MT.F62F.amount.replace(",","."))</Expression>
+        <PseudoCode>
+          dc_mark = substring(MT.F62F, 1, 1)
+          date_str = substring(MT.F62F, 2, 6)
+          currency = substring(MT.F62F, 8, 3)
+          amount_str = substring(MT.F62F, 11)
+          Bal_CLBD.Tp.CdOrPrtry.Cd = CLOSING_BALANCE_CODE
+          Bal_CLBD.Amt = decimal(amount_str.replace(",","."))
+          Bal_CLBD.CdtDbtInd = (dc_mark == "C") ? "CRDT" : "DBIT"
+          Bal_CLBD.Dt.Dt = expandCentury(date_str, "yyMMdd", CENTURY_CUTOFF_YEAR)
+        </PseudoCode>
+      </MappingFormula>
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_62F != null</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT with error "Missing mandatory field :62F:"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>BALANCE_CONTINUITY</Type>
+          <Expression>closing_balance == opening_balance + sum(entries)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>LOG_WARNING "Balance continuity check failed" AND PROCEED</ElseAction>
+        </Condition>
+      </Conditions>
+      <GlobalVariables>
+        <Variable ref="CLOSING_BALANCE_CODE"/>
+        <Variable ref="CENTURY_CUTOFF_YEAR"/>
+      </GlobalVariables>
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Interbank statement closing balance incorrect — nostro/vostro accounting discrepancy, completeness verification fails</ImpactIfFails>
+        <BusinessRationale>Closing balance mandatory for interbank statement completeness verification, final balance for the period</BusinessRationale>
+        <PerformanceImpact>LOW (string parsing + continuity check)</PerformanceImpact>
+        <AuditRequirement>Closing balance and continuity check result logged for SOX financial controls.</AuditRequirement>
+        <ComplianceRequirement>Closing balance mandatory for correspondent banking statement reporting.</ComplianceRequirement>
+        <DataPrivacy>Financial amount data. Access restricted.</DataPrivacy>
+        <MigrationNote>Same parsing logic as opening balance (MAPPING_05) but uses CLBD code. Identical to MT940 MAPPING_08.</MigrationNote>
+        <CachingStrategy>No caching.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 08 ==================== -->
+    <Mapping id="MAPPING_08">
+      <SourceField ref="FIELD_07"/>
+      <TargetField ref="FIELD_09"/>
+      <MappingFormula>
+        <Type>COMPOSITE_SPLIT_OPTIONAL</Type>
+        <Expression>if(MT.F64) Bal[CLAV].Amt = decimal(MT.F64.amount.replace(",","."))</Expression>
+        <PseudoCode>
+          if(MT.F64) dc_mark = substring(MT.F64, 1, 1)
+          if(MT.F64) date_str = substring(MT.F64, 2, 6)
+          if(MT.F64) amount_str = substring(MT.F64, 11)
+          if(MT.F64) Bal_CLAV.Tp.CdOrPrtry.Cd = "CLAV"
+          if(MT.F64) Bal_CLAV.Amt = decimal(amount_str.replace(",","."))
+          if(MT.F64) Bal_CLAV.CdtDbtInd = (dc_mark == "C") ? "CRDT" : "DBIT"
+          if(MT.F64) Bal_CLAV.Dt.Dt = expandCentury(date_str, "yyMMdd", CENTURY_CUTOFF_YEAR)
+        </PseudoCode>
+      </MappingFormula>
+      <Conditions>
+        <Condition priority="1">
+          <Type>OPTIONAL_FIELD</Type>
+          <Expression>true</Expression>
+          <Action>PROCESS if present, skip if null — field :64: is optional in MT950</Action>
+          <ElseAction>N/A</ElseAction>
+        </Condition>
+      </Conditions>
+      <GlobalVariables>
+        <Variable ref="CENTURY_CUTOFF_YEAR"/>
+      </GlobalVariables>
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Available balance information missing — statement still valid since field is optional</ImpactIfFails>
+        <BusinessRationale>Closing available balance distinguishes funds available for immediate use from closing book balance — important for correspondent bank liquidity management</BusinessRationale>
+        <PerformanceImpact>LOW (string parsing, same as other balance fields)</PerformanceImpact>
+        <AuditRequirement>Available balance logged alongside closing balance for cash position audit trail.</AuditRequirement>
+        <ComplianceRequirement>No specific regulatory mandate — best practice for Basel III intraday liquidity monitoring (BCBS 248).</ComplianceRequirement>
+        <DataPrivacy>Financial amount data. Access restricted.</DataPrivacy>
+        <MigrationNote>Same parsing logic as MT940's equivalent field :64: mapping — optional, uses CLAV code.</MigrationNote>
+        <CachingStrategy>No caching.</CachingStrategy>
+      </General>
+    </Mapping>
+
+  </FieldMappings>
+
+</MessageMapping>

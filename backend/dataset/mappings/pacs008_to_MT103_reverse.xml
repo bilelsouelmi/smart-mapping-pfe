@@ -1,0 +1,466 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MessageMapping version="1.0">
+
+  <!-- ============================================= -->
+  <!-- GENERAL INFORMATION -->
+  <!-- ============================================= -->
+  <GeneralInformation>
+    <MappingId>MAP_PACS008_MT103_REVERSE_001</MappingId>
+    <MappingName>pacs.008 to MT103 Conversion (XML -&gt; MT direction)</MappingName>
+    <Version>1.0.0</Version>
+    <CreatedDate>2026-07-18</CreatedDate>
+    <CreatedBy>Claude - XML-&gt;MT engine proof of concept</CreatedBy>
+    <LastModifiedDate>2026-07-18</LastModifiedDate>
+    <Status>ACTIVE</Status>
+
+    <!-- NOTE ON DIRECTION: SourceMessage/TargetMessage below are declared
+         MT103/pacs.008.001.08 — the SAME pair as MT103_to_pacs008.xml, not
+         swapped — because exact_rag_lookup's lookup_iso_to_mt_all() is a
+         thin wrapper around lookup_mt_to_iso_all() that filters Qdrant on
+         source_message_type=mt_type and target_message_type=iso_target
+         using whatever the CALLER passes as mt_type/iso_target, without
+         itself swapping which side is which. ai_learning_service always
+         passes mt_type="MT103", iso_target="pacs.008.001.08" for this
+         message pair regardless of upload direction (see
+         files.py/analyze_file), so this file matches that to be
+         discoverable. The actual reversal is entirely in what the
+         SourceField/TargetField *content* means below: SourceField.FieldTag
+         is an XML path (from the uploaded pacs.008 file), and
+         TargetField.XPath is a bare "F&lt;tag&gt;" key (e.g. "F50K" for
+         SWIFT field :50K:) that transform_mapping.py's
+         _transform_xml_to_mt_with_mapping bridge converts back to the real
+         SWIFT tag when assembling the final MT text via mt_generator.
+    -->
+
+    <BusinessContext>
+      <Description>
+        XML -&gt; MT direction counterpart to MT103_to_pacs008.xml. Converts an
+        ISO 20022 pacs.008.001.08 FIToFICstmrCdtTrf message back into SWIFT
+        MT103 text, using the same XML.&lt;path&gt; pseudocode dialect the
+        transformation engine understands (see _XMLPathRef in
+        transform_mapping.py).
+      </Description>
+      <UseCases>
+        <UseCase>Converting a pacs.008 payment received from an ISO 20022-native
+          system into legacy SWIFT MT103 for onward transmission</UseCase>
+      </UseCases>
+      <ApplicableDomains>Payments Hub, Treasury Operations, Corporate Banking</ApplicableDomains>
+    </BusinessContext>
+
+    <TechnicalSpecifications>
+      <SourceFormat>ISO 20022 pacs.008.001.08 (XML)</SourceFormat>
+      <TargetFormat>SWIFT MT103 (ISO 15022)</TargetFormat>
+      <ProcessingMode>REAL_TIME</ProcessingMode>
+    </TechnicalSpecifications>
+  </GeneralInformation>
+
+  <!-- ============================================= -->
+  <!-- SOURCE MESSAGE STRUCTURE (pacs.008 XML paths) -->
+  <!-- ============================================= -->
+  <SourceMessage>
+    <MessageType>MT103</MessageType>
+    <MessageName>pacs.008 field, as an XML path</MessageName>
+    <Standard>SWIFT ISO 15022</Standard>
+
+    <Fields>
+      <Field id="FIELD_01">
+        <FieldTag>GrpHdr.MsgId</FieldTag>
+        <FieldName>Message Identification</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>pacs.008 GrpHdr/MsgId, source for MT103 field :20:</Description>
+        <ExampleValue>PYMT20260610002</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_02">
+        <FieldTag>CdtTrfTxInf.IntrBkSttlmDt</FieldTag>
+        <FieldName>Interbank Settlement Date</FieldName>
+        <DataType>DATE</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Combines with IntrBkSttlmAmt to build MT103 field :32A:</Description>
+        <ExampleValue>2026-06-10</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_03">
+        <FieldTag>CdtTrfTxInf.Dbtr.Nm</FieldTag>
+        <FieldName>Debtor Name</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Combines with DbtrAcct/Id/IBAN to build MT103 field :50K:</Description>
+        <ExampleValue>SOCIETE DUPONT</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_04">
+        <FieldTag>CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI</FieldTag>
+        <FieldName>Debtor Agent BIC</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Source for MT103 field :52A: (Ordering Institution)</Description>
+        <ExampleValue>BNPAFRPPXXX</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_05">
+        <FieldTag>CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI</FieldTag>
+        <FieldName>Creditor Agent BIC</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Source for MT103 field :57A: (Account With Institution)</Description>
+        <ExampleValue>DEUTDEDBXXX</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_06">
+        <FieldTag>CdtTrfTxInf.Cdtr.Nm</FieldTag>
+        <FieldName>Creditor Name</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Combines with CdtrAcct/Id/IBAN to build MT103 field :59:</Description>
+        <ExampleValue>MUELLER GMBH</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_07">
+        <FieldTag>CdtTrfTxInf.RmtInf.Ustrd</FieldTag>
+        <FieldName>Remittance Information</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Source for MT103 field :70:</Description>
+        <ExampleValue>PAYMENT FOR INVOICE INV-DE-2026-442</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_08">
+        <FieldTag>CdtTrfTxInf.ChrgBr</FieldTag>
+        <FieldName>Charge Bearer</FieldName>
+        <DataType>CODE</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Source for MT103 field :71A: (SHAR-&gt;SHA, DEBT-&gt;OUR, CRED-&gt;BEN)</Description>
+        <ExampleValue>SHAR</ExampleValue>
+      </Field>
+
+      <!-- ADDED: postal address fields — appended as a 3rd line inside
+           :50K:/:59: (option K allows up to 4 name+address lines) instead
+           of being silently dropped. Town/country are combined per side by
+           buildCustomerLine(), so they don't need their own standalone
+           MAPPING entry/target — they're inputs to MAPPING_03/MAPPING_06,
+           the same pattern already used for DbtrAcct/CdtrAcct IBAN. -->
+      <Field id="FIELD_09">
+        <FieldTag>CdtTrfTxInf.Dbtr.PstlAdr.TwnNm</FieldTag>
+        <FieldName>Debtor Town</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Combines with Dbtr/PstlAdr/Ctry as an address line inside MT103 field :50K:</Description>
+        <ExampleValue>PARIS</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_10">
+        <FieldTag>CdtTrfTxInf.Dbtr.PstlAdr.Ctry</FieldTag>
+        <FieldName>Debtor Country</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Combines with Dbtr/PstlAdr/TwnNm as an address line inside MT103 field :50K:</Description>
+        <ExampleValue>FR</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_11">
+        <FieldTag>CdtTrfTxInf.Cdtr.PstlAdr.TwnNm</FieldTag>
+        <FieldName>Creditor Town</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Combines with Cdtr/PstlAdr/Ctry as an address line inside MT103 field :59:</Description>
+        <ExampleValue>BERLIN</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_12">
+        <FieldTag>CdtTrfTxInf.Cdtr.PstlAdr.Ctry</FieldTag>
+        <FieldName>Creditor Country</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Combines with Cdtr/PstlAdr/TwnNm as an address line inside MT103 field :59:</Description>
+        <ExampleValue>DE</ExampleValue>
+      </Field>
+
+      <!-- ADDED: pacs.008's Amt/InstdAmt is a DIFFERENT value from
+           IntrBkSttlmAmt (FIELD_02's sibling, already used by F32A) — the
+           debtor-instructed amount vs. the actual settled amount, which
+           can differ (FX conversion, deducted charges). MT103 has a
+           dedicated field for exactly this case: :33B:. -->
+      <Field id="FIELD_13">
+        <FieldTag>CdtTrfTxInf.Amt.InstdAmt</FieldTag>
+        <FieldName>Instructed Amount</FieldName>
+        <DataType>AMOUNT</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Only present in real pacs.008 messages when it differs from the settled amount (IntrBkSttlmAmt) — maps to MT103 field :33B:</Description>
+        <ExampleValue>5000.00</ExampleValue>
+      </Field>
+    </Fields>
+  </SourceMessage>
+
+  <!-- ============================================= -->
+  <!-- TARGET MESSAGE STRUCTURE (MT103 field tags) -->
+  <!-- ============================================= -->
+  <TargetMessage>
+    <MessageType>pacs.008.001.08</MessageType>
+    <MessageName>MT103 field, as a bare F-tag key</MessageName>
+    <Standard>ISO 20022</Standard>
+
+    <Fields>
+      <Field id="TARGET_01">
+        <XPath>F20</XPath>
+        <FieldName>Transaction Reference Number</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>SWIFT MT103 field :20:</Description>
+      </Field>
+
+      <Field id="TARGET_02">
+        <XPath>F32A</XPath>
+        <FieldName>Value Date/Currency/Amount</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>SWIFT MT103 field :32A: (composite: YYMMDD + CCY + amount)</Description>
+      </Field>
+
+      <Field id="TARGET_03">
+        <XPath>F50K</XPath>
+        <FieldName>Ordering Customer</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>SWIFT MT103 field :50K: (composite: /account + name)</Description>
+      </Field>
+
+      <Field id="TARGET_04">
+        <XPath>F52A</XPath>
+        <FieldName>Ordering Institution</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>SWIFT MT103 field :52A:</Description>
+      </Field>
+
+      <Field id="TARGET_05">
+        <XPath>F57A</XPath>
+        <FieldName>Account With Institution</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>SWIFT MT103 field :57A:</Description>
+      </Field>
+
+      <Field id="TARGET_06">
+        <XPath>F59</XPath>
+        <FieldName>Beneficiary Customer</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>SWIFT MT103 field :59: (composite: /account + name)</Description>
+      </Field>
+
+      <Field id="TARGET_07">
+        <XPath>F70</XPath>
+        <FieldName>Remittance Information</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>SWIFT MT103 field :70:</Description>
+      </Field>
+
+      <Field id="TARGET_08">
+        <XPath>F71A</XPath>
+        <FieldName>Details of Charges</FieldName>
+        <DataType>CODE</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>SWIFT MT103 field :71A:</Description>
+      </Field>
+
+      <Field id="TARGET_09">
+        <XPath>F33B</XPath>
+        <FieldName>Currency/Instructed Amount</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>SWIFT MT103 field :33B: (composite: 3-char currency + amount, no date)</Description>
+      </Field>
+    </Fields>
+  </TargetMessage>
+
+  <!-- ============================================= -->
+  <!-- FIELD MAPPINGS -->
+  <!-- ============================================= -->
+  <FieldMappings>
+
+    <!-- ==================== MAPPING 01 ==================== -->
+    <Mapping id="MAPPING_01">
+      <SourceField ref="FIELD_01"/>
+      <TargetField ref="TARGET_01"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F20 = XML.GrpHdr.MsgId.truncate(16)</Expression>
+        <PseudoCode>
+          F20 = XML.GrpHdr.MsgId.truncate(16)
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>MT103 message has no transaction reference — mandatory field.</ImpactIfFails>
+        <BusinessRationale>pacs.008's GrpHdr/MsgId is the message's own unique identifier, matching MT103's :20: role.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Direct copy, no transformation needed.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 02 ==================== -->
+    <Mapping id="MAPPING_02">
+      <SourceField ref="FIELD_02"/>
+      <TargetField ref="TARGET_02"/>
+      <MappingFormula>
+        <Type>COMPOSITE_BUILD</Type>
+        <Expression>F32A = isoDateToSwift(XML.CdtTrfTxInf.IntrBkSttlmDt) + XML.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy + toSwiftAmount(XML.CdtTrfTxInf.IntrBkSttlmAmt)</Expression>
+        <PseudoCode>
+          F32A = isoDateToSwift(XML.CdtTrfTxInf.IntrBkSttlmDt) + XML.CdtTrfTxInf.IntrBkSttlmAmt.@Ccy + toSwiftAmount(XML.CdtTrfTxInf.IntrBkSttlmAmt)
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Settlement date, currency and amount are all lost — MT103 unusable without :32A:.</ImpactIfFails>
+        <BusinessRationale>Rebuilds SWIFT's composite value-date+currency+amount field from the three separate ISO 20022 elements.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (string formatting only)</PerformanceImpact>
+        <MigrationNote>isoDateToSwift() converts YYYY-MM-DD -&gt; YYMMDD; toSwiftAmount() converts decimal '.' to SWIFT comma notation.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 03 ==================== -->
+    <Mapping id="MAPPING_03">
+      <SourceField ref="FIELD_03"/>
+      <TargetField ref="TARGET_03"/>
+      <MappingFormula>
+        <Type>COMPOSITE_BUILD</Type>
+        <Expression>F50K = buildCustomerLine(XML.CdtTrfTxInf.DbtrAcct.Id.IBAN, XML.CdtTrfTxInf.Dbtr.Nm, XML.CdtTrfTxInf.Dbtr.PstlAdr.TwnNm, XML.CdtTrfTxInf.Dbtr.PstlAdr.Ctry)</Expression>
+        <PseudoCode>
+          F50K = buildCustomerLine(XML.CdtTrfTxInf.DbtrAcct.Id.IBAN, XML.CdtTrfTxInf.Dbtr.Nm, XML.CdtTrfTxInf.Dbtr.PstlAdr.TwnNm, XML.CdtTrfTxInf.Dbtr.PstlAdr.Ctry)
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Ordering customer identity lost — mandatory MT103 field.</ImpactIfFails>
+        <BusinessRationale>SWIFT's :50K: combines account and name on two lines ("/IBAN" then name), plus an optional 3rd line for town/country; ISO 20022 keeps them as separate elements (DbtrAcct/Id/IBAN, Dbtr/Nm, Dbtr/PstlAdr/TwnNm+Ctry).</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>buildCustomerLine() is the reverse of the forward direction's firstLine()/accountLine() split; town/country are appended as a 3rd free-text line since option K has no structured address fields.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 04 ==================== -->
+    <Mapping id="MAPPING_04">
+      <SourceField ref="FIELD_04"/>
+      <TargetField ref="TARGET_04"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F52A = XML.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI</Expression>
+        <PseudoCode>
+          F52A = XML.CdtTrfTxInf.DbtrAgt.FinInstnId.BICFI
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Ordering institution missing — optional field, message still valid.</ImpactIfFails>
+        <BusinessRationale>Direct BIC passthrough from the debtor's agent.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Direct copy, no transformation needed.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 05 ==================== -->
+    <Mapping id="MAPPING_05">
+      <SourceField ref="FIELD_05"/>
+      <TargetField ref="TARGET_05"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F57A = XML.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI</Expression>
+        <PseudoCode>
+          F57A = XML.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Account With Institution missing — optional field, message still valid.</ImpactIfFails>
+        <BusinessRationale>Direct BIC passthrough from the creditor's agent.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Direct copy, no transformation needed.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 06 ==================== -->
+    <Mapping id="MAPPING_06">
+      <SourceField ref="FIELD_06"/>
+      <TargetField ref="TARGET_06"/>
+      <MappingFormula>
+        <Type>COMPOSITE_BUILD</Type>
+        <Expression>F59 = buildCustomerLine(XML.CdtTrfTxInf.CdtrAcct.Id.IBAN, XML.CdtTrfTxInf.Cdtr.Nm, XML.CdtTrfTxInf.Cdtr.PstlAdr.TwnNm, XML.CdtTrfTxInf.Cdtr.PstlAdr.Ctry)</Expression>
+        <PseudoCode>
+          F59 = buildCustomerLine(XML.CdtTrfTxInf.CdtrAcct.Id.IBAN, XML.CdtTrfTxInf.Cdtr.Nm, XML.CdtTrfTxInf.Cdtr.PstlAdr.TwnNm, XML.CdtTrfTxInf.Cdtr.PstlAdr.Ctry)
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Beneficiary identity lost — mandatory MT103 field.</ImpactIfFails>
+        <BusinessRationale>Same composite as :50K:, for the beneficiary side, including the optional town/country address line.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>buildCustomerLine() is the reverse of the forward direction's firstLine()/accountLine() split; town/country are appended as a 3rd free-text line since option K has no structured address fields.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 07 ==================== -->
+    <Mapping id="MAPPING_07">
+      <SourceField ref="FIELD_07"/>
+      <TargetField ref="TARGET_07"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F70 = XML.CdtTrfTxInf.RmtInf.Ustrd</Expression>
+        <PseudoCode>
+          F70 = XML.CdtTrfTxInf.RmtInf.Ustrd
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>LOW</Criticality>
+        <ImpactIfFails>Remittance narrative lost — optional field.</ImpactIfFails>
+        <BusinessRationale>Direct text passthrough.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Direct copy, no transformation needed.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 08 ==================== -->
+    <Mapping id="MAPPING_08">
+      <SourceField ref="FIELD_08"/>
+      <TargetField ref="TARGET_08"/>
+      <MappingFormula>
+        <Type>CODE_MAPPING</Type>
+        <Expression>F71A = (XML.CdtTrfTxInf.ChrgBr == "SHAR") ? "SHA" : (XML.CdtTrfTxInf.ChrgBr == "DEBT") ? "OUR" : "BEN"</Expression>
+        <PseudoCode>
+          F71A = (XML.CdtTrfTxInf.ChrgBr == "SHAR") ? "SHA" : (XML.CdtTrfTxInf.ChrgBr == "DEBT") ? "OUR" : "BEN"
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>Charge allocation dispute between debtor and creditor bank.</ImpactIfFails>
+        <BusinessRationale>Reverse of the forward direction's CHRGBR mapping: ISO 20022's 4-letter codes (SHAR/DEBT/CRED) back to SWIFT's 3-letter codes (SHA/OUR/BEN).</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Fixed code crosswalk, same mapping table as the forward direction, inverted.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 09 ==================== -->
+    <Mapping id="MAPPING_09">
+      <SourceField ref="FIELD_13"/>
+      <TargetField ref="TARGET_09"/>
+      <MappingFormula>
+        <Type>EXTRACTION_AND_XML_FORMATTING</Type>
+        <Expression>if(XML.CdtTrfTxInf.Amt.InstdAmt) F33B = XML.CdtTrfTxInf.Amt.InstdAmt.@Ccy + toSwiftAmount(XML.CdtTrfTxInf.Amt.InstdAmt)</Expression>
+        <PseudoCode>
+          if(XML.CdtTrfTxInf.Amt.InstdAmt) F33B = XML.CdtTrfTxInf.Amt.InstdAmt.@Ccy + toSwiftAmount(XML.CdtTrfTxInf.Amt.InstdAmt)
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>LOW</Criticality>
+        <ImpactIfFails>Instructed amount not carried when it differs from settled amount — settlement itself is unaffected (F32A already has the settled amount), only the audit trail of the originally-instructed figure is lost.</ImpactIfFails>
+        <BusinessRationale>pacs.008's Amt/InstdAmt is optional and, per ISO 20022 usage, only populated when it genuinely differs from IntrBkSttlmAmt (e.g. FX conversion or deducted correspondent charges) — mirrors the forward direction's optional :33B: coverage.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (string formatting only)</PerformanceImpact>
+        <MigrationNote>:33B: format is 3!a15d (currency + amount, no date) — unlike :32A:'s 6!n3!a15d, no date component.</MigrationNote>
+      </General>
+    </Mapping>
+
+  </FieldMappings>
+
+</MessageMapping>

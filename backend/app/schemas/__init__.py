@@ -17,6 +17,17 @@ from app.schemas.mapping_formula import (
     MappingFormulaUpdate,
     MappingFormulaResponse,
 )
+from app.schemas.mapping import (
+    MappingBase,
+    MappingCreate,
+    MappingUpdate,
+    MappingResponse,
+    MappingListResponse,
+    MappingElementBase,
+    MappingElementCreate,
+    MappingElementUpdate,
+    MappingElementResponse,
+)
 from app.schemas.file_upload import (
     FileUploadBase,
     FileUploadCreate,
@@ -56,6 +67,17 @@ __all__ = [
     "MappingFormulaCreate",
     "MappingFormulaUpdate",
     "MappingFormulaResponse",
+    # Mapping
+    "MappingBase",
+    "MappingCreate",
+    "MappingUpdate",
+    "MappingResponse",
+    "MappingListResponse",
+    # MappingElement
+    "MappingElementBase",
+    "MappingElementCreate",
+    "MappingElementUpdate",
+    "MappingElementResponse",
     # FileUpload
     "FileUploadBase",
     "FileUploadCreate",

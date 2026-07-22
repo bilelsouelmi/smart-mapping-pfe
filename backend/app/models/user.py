@@ -19,7 +19,7 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     # Relations
-    message_descriptions = relationship("MessageDescription", back_populates="user", cascade="all, delete-orphan")
+    message_descriptions = relationship("MessageDescription", back_populates="user", cascade="all, delete-orphan", foreign_keys="MessageDescription.user_id")
     file_uploads = relationship("FileUpload", back_populates="user", cascade="all, delete-orphan")
     transformation_jobs = relationship("TransformationJob", back_populates="user", cascade="all, delete-orphan")
     ai_learning_entries = relationship("AILearning", back_populates="user")  # ← CORRIGÉ ICI

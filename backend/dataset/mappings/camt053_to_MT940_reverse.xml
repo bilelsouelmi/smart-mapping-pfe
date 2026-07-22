@@ -1,0 +1,419 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MessageMapping version="1.0">
+
+  <!-- ============================================= -->
+  <!-- GENERAL INFORMATION -->
+  <!-- ============================================= -->
+  <GeneralInformation>
+    <MappingId>MAP_CAMT053_MT940_REVERSE_001</MappingId>
+    <MappingName>camt.053 to MT940 Conversion (XML -&gt; MT direction)</MappingName>
+    <Version>1.0.0</Version>
+    <CreatedDate>2026-07-18</CreatedDate>
+    <CreatedBy>Claude - XML-&gt;MT engine, message pair 5/6 (final pair)</CreatedBy>
+    <LastModifiedDate>2026-07-18</LastModifiedDate>
+    <Status>ACTIVE</Status>
+
+    <!-- NOTE ON DIRECTION: same convention as the other _reverse.xml files
+         — declared as MT940/camt.053.001.08 (NOT swapped). SourceField.
+         FieldTag paths use the Bal_OPBD/Bal_CLBD/Bal_CLAV/Bal_FWAV and
+         Ntry disambiguated keys that extract_xml_source_fields now
+         produces for repeated siblings (see that function's docstring in
+         transform_mapping.py) — without this extension, multiple <Bal>
+         elements (one per balance type) would collide on a single
+         "Stmt.Bal.Amt" path and only the first-seen balance would ever be
+         extractable, making a correct opening+closing balance round-trip
+         impossible.
+
+         KNOWN LIMITATION: :61:/:86: below only cover the FIRST statement
+         entry (Ntry). A camt.053 statement with multiple transactions
+         will only produce one :61:/:86: pair in the MT940 output — full
+         multi-entry output would additionally require mt_generator.py's
+         block4 builder to support repeated tag values (a list of :61:/:86:
+         pairs instead of one value per tag), which is separate, unbuilt
+         work beyond this dataset/extractor pass.
+    -->
+
+    <BusinessContext>
+      <Description>
+        XML -&gt; MT direction counterpart to MT940_to_camt053.xml. Converts an
+        ISO 20022 camt.053.001.08 BankToCustomerStatement back into SWIFT
+        MT940 text.
+      </Description>
+      <UseCases>
+        <UseCase>Converting a camt.053 account statement received from an
+          ISO 20022-native system into legacy SWIFT MT940 for onward
+          transmission</UseCase>
+      </UseCases>
+      <ApplicableDomains>Cash Management, Account Statement Reporting, Treasury Operations</ApplicableDomains>
+    </BusinessContext>
+
+    <TechnicalSpecifications>
+      <SourceFormat>ISO 20022 camt.053.001.08 (XML)</SourceFormat>
+      <TargetFormat>SWIFT MT940 (ISO 15022)</TargetFormat>
+      <ProcessingMode>REAL_TIME</ProcessingMode>
+    </TechnicalSpecifications>
+  </GeneralInformation>
+
+  <!-- ============================================= -->
+  <!-- SOURCE MESSAGE STRUCTURE (camt.053 XML paths) -->
+  <!-- ============================================= -->
+  <SourceMessage>
+    <MessageType>MT940</MessageType>
+    <MessageName>camt.053 field, as an XML path</MessageName>
+    <Standard>SWIFT ISO 15022</Standard>
+
+    <Fields>
+      <Field id="FIELD_01">
+        <FieldTag>Stmt.Id</FieldTag>
+        <FieldName>Statement Identification</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Source for MT940 field :20:</Description>
+        <ExampleValue>STMT20260718001</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_02">
+        <FieldTag>Stmt.Acct.Id.IBAN</FieldTag>
+        <FieldName>Account IBAN</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Source for MT940 field :25:</Description>
+        <ExampleValue>FR7630006000011234567890189</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_03">
+        <FieldTag>Stmt.ElctrncSeqNb</FieldTag>
+        <FieldName>Electronic Sequence Number</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Source for MT940 field :28C:</Description>
+        <ExampleValue>42</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_04">
+        <FieldTag>Stmt.Bal_OPBD.Dt.Dt</FieldTag>
+        <FieldName>Opening Balance Date</FieldName>
+        <DataType>DATE</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Combines with Bal_OPBD.Amt/CdtDbtInd to build MT940 field :60F:</Description>
+        <ExampleValue>2026-07-18</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_05">
+        <FieldTag>Stmt.Bal_OPBD.Amt</FieldTag>
+        <FieldName>Opening Balance Amount</FieldName>
+        <DataType>AMOUNT</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Combines with Bal_OPBD.Dt.Dt/CdtDbtInd to build MT940 field :60F:</Description>
+        <ExampleValue>10000.00</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_06">
+        <FieldTag>Stmt.Bal_CLBD.Dt.Dt</FieldTag>
+        <FieldName>Closing Balance Date</FieldName>
+        <DataType>DATE</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Combines with Bal_CLBD.Amt/CdtDbtInd to build MT940 field :62F:</Description>
+        <ExampleValue>2026-07-18</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_07">
+        <FieldTag>Stmt.Bal_CLBD.Amt</FieldTag>
+        <FieldName>Closing Balance Amount</FieldName>
+        <DataType>AMOUNT</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Combines with Bal_CLBD.Dt.Dt/CdtDbtInd to build MT940 field :62F:</Description>
+        <ExampleValue>15000.00</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_08">
+        <FieldTag>Stmt.Bal_CLAV.Dt.Dt</FieldTag>
+        <FieldName>Closing Available Balance Date</FieldName>
+        <DataType>DATE</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Combines with Bal_CLAV.Amt/CdtDbtInd to build MT940 field :64: (optional)</Description>
+        <ExampleValue>2026-07-18</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_09">
+        <FieldTag>Stmt.Bal_CLAV.Amt</FieldTag>
+        <FieldName>Closing Available Balance Amount</FieldName>
+        <DataType>AMOUNT</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Combines with Bal_CLAV.Dt.Dt/CdtDbtInd to build MT940 field :64: (optional)</Description>
+        <ExampleValue>14500.00</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_10">
+        <FieldTag>Stmt.Bal_FWAV.Dt.Dt</FieldTag>
+        <FieldName>Forward Available Balance Date</FieldName>
+        <DataType>DATE</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Combines with Bal_FWAV.Amt/CdtDbtInd to build MT940 field :65: (optional)</Description>
+        <ExampleValue>2026-07-19</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_11">
+        <FieldTag>Stmt.Bal_FWAV.Amt</FieldTag>
+        <FieldName>Forward Available Balance Amount</FieldName>
+        <DataType>AMOUNT</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Combines with Bal_FWAV.Dt.Dt/CdtDbtInd to build MT940 field :65: (optional)</Description>
+        <ExampleValue>16000.00</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_12">
+        <FieldTag>Stmt.Ntry.ValDt.Dt</FieldTag>
+        <FieldName>First Entry Value Date</FieldName>
+        <DataType>DATE</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Combines with Ntry.Amt/CdtDbtInd to build MT940 field :61: (first entry only — see file-level KNOWN LIMITATION note)</Description>
+        <ExampleValue>2026-07-18</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_13">
+        <FieldTag>Stmt.Ntry.Amt</FieldTag>
+        <FieldName>First Entry Amount</FieldName>
+        <DataType>AMOUNT</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Combines with Ntry.ValDt.Dt/CdtDbtInd to build MT940 field :61:</Description>
+        <ExampleValue>5000.00</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_14">
+        <FieldTag>Stmt.Ntry.NtryDtls.TxDtls.RmtInf.Ustrd</FieldTag>
+        <FieldName>First Entry Remittance Information</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Source for MT940 field :86: (first entry only)</Description>
+        <ExampleValue>Invoice payment INV-2026-0718-001</ExampleValue>
+      </Field>
+
+      <!-- CdtDbtInd fields: consumed by the composite formulas above, no
+           standalone targets needed — same shared-input pattern used
+           throughout the other _reverse.xml files. -->
+      <Field id="FIELD_15">
+        <FieldTag>Stmt.Bal_OPBD.CdtDbtInd</FieldTag>
+        <FieldName>Opening Balance D/C Indicator</FieldName>
+        <DataType>CODE</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Combines with Bal_OPBD.Dt.Dt/Amt to build MT940 field :60F:</Description>
+        <ExampleValue>CRDT</ExampleValue>
+      </Field>
+      <Field id="FIELD_16">
+        <FieldTag>Stmt.Bal_CLBD.CdtDbtInd</FieldTag>
+        <FieldName>Closing Balance D/C Indicator</FieldName>
+        <DataType>CODE</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Combines with Bal_CLBD.Dt.Dt/Amt to build MT940 field :62F:</Description>
+        <ExampleValue>CRDT</ExampleValue>
+      </Field>
+      <Field id="FIELD_17">
+        <FieldTag>Stmt.Bal_CLAV.CdtDbtInd</FieldTag>
+        <FieldName>Closing Available Balance D/C Indicator</FieldName>
+        <DataType>CODE</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Combines with Bal_CLAV.Dt.Dt/Amt to build MT940 field :64: (optional)</Description>
+        <ExampleValue>CRDT</ExampleValue>
+      </Field>
+      <Field id="FIELD_18">
+        <FieldTag>Stmt.Bal_FWAV.CdtDbtInd</FieldTag>
+        <FieldName>Forward Available Balance D/C Indicator</FieldName>
+        <DataType>CODE</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Combines with Bal_FWAV.Dt.Dt/Amt to build MT940 field :65: (optional)</Description>
+        <ExampleValue>CRDT</ExampleValue>
+      </Field>
+      <Field id="FIELD_19">
+        <FieldTag>Stmt.Ntry.CdtDbtInd</FieldTag>
+        <FieldName>First Entry D/C Indicator</FieldName>
+        <DataType>CODE</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Combines with Ntry.ValDt.Dt/Amt to build MT940 field :61:</Description>
+        <ExampleValue>CRDT</ExampleValue>
+      </Field>
+    </Fields>
+  </SourceMessage>
+
+  <!-- ============================================= -->
+  <!-- TARGET MESSAGE STRUCTURE (MT940 field tags) -->
+  <!-- ============================================= -->
+  <TargetMessage>
+    <MessageType>camt.053.001.08</MessageType>
+    <MessageName>MT940 field, as a bare F-tag key</MessageName>
+    <Standard>ISO 20022</Standard>
+
+    <Fields>
+      <Field id="TARGET_01"><XPath>F20</XPath><FieldName>Transaction Reference Number</FieldName><DataType>STRING</DataType><Mandatory>true</Mandatory><Description>SWIFT MT940 field :20:</Description></Field>
+      <Field id="TARGET_02"><XPath>F25</XPath><FieldName>Account Identification</FieldName><DataType>STRING</DataType><Mandatory>true</Mandatory><Description>SWIFT MT940 field :25:</Description></Field>
+      <Field id="TARGET_03"><XPath>F28C</XPath><FieldName>Statement Number/Sequence Number</FieldName><DataType>STRING</DataType><Mandatory>true</Mandatory><Description>SWIFT MT940 field :28C:</Description></Field>
+      <Field id="TARGET_04"><XPath>F60F</XPath><FieldName>Opening Balance</FieldName><DataType>STRING</DataType><Mandatory>true</Mandatory><Description>SWIFT MT940 field :60F: (composite: D/C + YYMMDD + CCY + amount)</Description></Field>
+      <Field id="TARGET_05"><XPath>F62F</XPath><FieldName>Closing Balance</FieldName><DataType>STRING</DataType><Mandatory>true</Mandatory><Description>SWIFT MT940 field :62F: (composite)</Description></Field>
+      <Field id="TARGET_06"><XPath>F64</XPath><FieldName>Closing Available Balance</FieldName><DataType>STRING</DataType><Mandatory>false</Mandatory><Description>SWIFT MT940 field :64: (composite, optional)</Description></Field>
+      <Field id="TARGET_07"><XPath>F65</XPath><FieldName>Forward Available Balance</FieldName><DataType>STRING</DataType><Mandatory>false</Mandatory><Description>SWIFT MT940 field :65: (composite, optional)</Description></Field>
+      <Field id="TARGET_08"><XPath>F61</XPath><FieldName>Statement Line</FieldName><DataType>STRING</DataType><Mandatory>false</Mandatory><Description>SWIFT MT940 field :61: (first entry only — see file-level KNOWN LIMITATION note)</Description></Field>
+      <Field id="TARGET_09"><XPath>F86</XPath><FieldName>Information to Account Owner</FieldName><DataType>STRING</DataType><Mandatory>false</Mandatory><Description>SWIFT MT940 field :86: (first entry only)</Description></Field>
+    </Fields>
+  </TargetMessage>
+
+  <!-- ============================================= -->
+  <!-- FIELD MAPPINGS -->
+  <!-- ============================================= -->
+  <FieldMappings>
+
+    <Mapping id="MAPPING_01">
+      <SourceField ref="FIELD_01"/>
+      <TargetField ref="TARGET_01"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F20 = XML.Stmt.Id.truncate(16)</Expression>
+        <PseudoCode>F20 = XML.Stmt.Id.truncate(16)</PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>MT940 message has no statement reference — mandatory field.</ImpactIfFails>
+        <BusinessRationale>Reverse of the forward direction's F20 -&gt; GrpHdr.MsgId/Stmt.Id mapping.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Direct copy, no transformation needed.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <Mapping id="MAPPING_02">
+      <SourceField ref="FIELD_02"/>
+      <TargetField ref="TARGET_02"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F25 = XML.Stmt.Acct.Id.IBAN</Expression>
+        <PseudoCode>F25 = XML.Stmt.Acct.Id.IBAN</PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Statement account unidentifiable — mandatory field.</ImpactIfFails>
+        <BusinessRationale>Direct IBAN passthrough.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Direct copy, no transformation needed.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <Mapping id="MAPPING_03">
+      <SourceField ref="FIELD_03"/>
+      <TargetField ref="TARGET_03"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F28C = XML.Stmt.ElctrncSeqNb</Expression>
+        <PseudoCode>F28C = XML.Stmt.ElctrncSeqNb</PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Statement sequencing lost — mandatory field but not financially critical.</ImpactIfFails>
+        <BusinessRationale>Direct passthrough of the electronic sequence number.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Reverse of forward's extractStatementNumber(); the optional /page-sequence suffix isn't reconstructed since camt.053's ElctrncSeqNb carries only the single sequence number.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <Mapping id="MAPPING_04">
+      <SourceField ref="FIELD_05"/>
+      <TargetField ref="TARGET_04"/>
+      <MappingFormula>
+        <Type>COMPOSITE_BUILD</Type>
+        <Expression>F60F = toSwiftDCMark(XML.Stmt.Bal_OPBD.CdtDbtInd) + isoDateToSwift(XML.Stmt.Bal_OPBD.Dt.Dt) + XML.Stmt.Bal_OPBD.Amt.@Ccy + toSwiftAmount(XML.Stmt.Bal_OPBD.Amt)</Expression>
+        <PseudoCode>F60F = toSwiftDCMark(XML.Stmt.Bal_OPBD.CdtDbtInd) + isoDateToSwift(XML.Stmt.Bal_OPBD.Dt.Dt) + XML.Stmt.Bal_OPBD.Amt.@Ccy + toSwiftAmount(XML.Stmt.Bal_OPBD.Amt)</PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Opening balance lost — mandatory MT940 field, statement unusable for reconciliation.</ImpactIfFails>
+        <BusinessRationale>Rebuilds SWIFT's composite D/C-mark+date+currency+amount field from the Bal_OPBD-disambiguated ISO 20022 elements (see file-level note on the Bal_OPBD/Bal_CLBD naming).</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (string formatting only)</PerformanceImpact>
+        <MigrationNote>toSwiftDCMark() converts CRDT/DBIT -&gt; C/D; isoDateToSwift() converts YYYY-MM-DD -&gt; YYMMDD; toSwiftAmount() converts decimal '.' to SWIFT comma notation.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <Mapping id="MAPPING_05">
+      <SourceField ref="FIELD_07"/>
+      <TargetField ref="TARGET_05"/>
+      <MappingFormula>
+        <Type>COMPOSITE_BUILD</Type>
+        <Expression>F62F = toSwiftDCMark(XML.Stmt.Bal_CLBD.CdtDbtInd) + isoDateToSwift(XML.Stmt.Bal_CLBD.Dt.Dt) + XML.Stmt.Bal_CLBD.Amt.@Ccy + toSwiftAmount(XML.Stmt.Bal_CLBD.Amt)</Expression>
+        <PseudoCode>F62F = toSwiftDCMark(XML.Stmt.Bal_CLBD.CdtDbtInd) + isoDateToSwift(XML.Stmt.Bal_CLBD.Dt.Dt) + XML.Stmt.Bal_CLBD.Amt.@Ccy + toSwiftAmount(XML.Stmt.Bal_CLBD.Amt)</PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Closing balance lost — mandatory MT940 field, statement unusable for reconciliation.</ImpactIfFails>
+        <BusinessRationale>Same composite build as :60F:, keyed to Bal_CLBD instead of Bal_OPBD.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (string formatting only)</PerformanceImpact>
+        <MigrationNote>Same helper functions as MAPPING_04.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <Mapping id="MAPPING_06">
+      <SourceField ref="FIELD_09"/>
+      <TargetField ref="TARGET_06"/>
+      <MappingFormula>
+        <Type>COMPOSITE_BUILD</Type>
+        <Expression>F64 = toSwiftDCMark(XML.Stmt.Bal_CLAV.CdtDbtInd) + isoDateToSwift(XML.Stmt.Bal_CLAV.Dt.Dt) + XML.Stmt.Bal_CLAV.Amt.@Ccy + toSwiftAmount(XML.Stmt.Bal_CLAV.Amt)</Expression>
+        <PseudoCode>F64 = toSwiftDCMark(XML.Stmt.Bal_CLAV.CdtDbtInd) + isoDateToSwift(XML.Stmt.Bal_CLAV.Dt.Dt) + XML.Stmt.Bal_CLAV.Amt.@Ccy + toSwiftAmount(XML.Stmt.Bal_CLAV.Amt)</PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>LOW</Criticality>
+        <ImpactIfFails>Closing available balance omitted — optional field.</ImpactIfFails>
+        <BusinessRationale>Same composite build as :60F:/:62F:, keyed to Bal_CLAV. Only present when the source camt.053 includes a CLAV balance.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Same helper functions as MAPPING_04. Empty result (no Bal_CLAV in source) means the element naturally resolves to empty and is omitted from output.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <Mapping id="MAPPING_07">
+      <SourceField ref="FIELD_11"/>
+      <TargetField ref="TARGET_07"/>
+      <MappingFormula>
+        <Type>COMPOSITE_BUILD</Type>
+        <Expression>F65 = toSwiftDCMark(XML.Stmt.Bal_FWAV.CdtDbtInd) + isoDateToSwift(XML.Stmt.Bal_FWAV.Dt.Dt) + XML.Stmt.Bal_FWAV.Amt.@Ccy + toSwiftAmount(XML.Stmt.Bal_FWAV.Amt)</Expression>
+        <PseudoCode>F65 = toSwiftDCMark(XML.Stmt.Bal_FWAV.CdtDbtInd) + isoDateToSwift(XML.Stmt.Bal_FWAV.Dt.Dt) + XML.Stmt.Bal_FWAV.Amt.@Ccy + toSwiftAmount(XML.Stmt.Bal_FWAV.Amt)</PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>LOW</Criticality>
+        <ImpactIfFails>Forward available balance omitted — optional field.</ImpactIfFails>
+        <BusinessRationale>Same composite build as :60F:/:62F:, keyed to Bal_FWAV. Only present when the source camt.053 includes a FWAV balance.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Same helper functions as MAPPING_04.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <Mapping id="MAPPING_08">
+      <SourceField ref="FIELD_13"/>
+      <TargetField ref="TARGET_08"/>
+      <MappingFormula>
+        <Type>COMPOSITE_BUILD</Type>
+        <Expression>F61 = isoDateToSwift(XML.Stmt.Ntry.ValDt.Dt) + toSwiftDCMark(XML.Stmt.Ntry.CdtDbtInd) + toSwiftAmount(XML.Stmt.Ntry.Amt) + "NTRF" + "NONREF"</Expression>
+        <PseudoCode>F61 = isoDateToSwift(XML.Stmt.Ntry.ValDt.Dt) + toSwiftDCMark(XML.Stmt.Ntry.CdtDbtInd) + toSwiftAmount(XML.Stmt.Ntry.Amt) + "NTRF" + "NONREF"</PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>First transaction entry omitted — optional field, statement still valid without any entries.</ImpactIfFails>
+        <BusinessRationale>Rebuilds a minimal but valid SWIFT :61: line (value date, D/C mark, amount, fixed "NTRF" transaction type code, "NONREF" reference placeholder) from the first statement entry. camt.053's Ntry has no field equivalent to :61:'s free-form 16x customer reference, so a fixed placeholder is used — see file-level KNOWN LIMITATION note.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (string formatting only)</PerformanceImpact>
+        <MigrationNote>ONLY the first entry (Ntry) is converted — a statement with multiple transactions will lose entries 2+ in this direction until mt_generator.py supports repeated :61:/:86: pairs per tag.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <Mapping id="MAPPING_09">
+      <SourceField ref="FIELD_14"/>
+      <TargetField ref="TARGET_09"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F86 = XML.Stmt.Ntry.NtryDtls.TxDtls.RmtInf.Ustrd</Expression>
+        <PseudoCode>F86 = XML.Stmt.Ntry.NtryDtls.TxDtls.RmtInf.Ustrd</PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>LOW</Criticality>
+        <ImpactIfFails>First entry's narrative lost — optional field.</ImpactIfFails>
+        <BusinessRationale>Direct text passthrough from the first entry's remittance info.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Same first-entry-only limitation as MAPPING_08.</MigrationNote>
+      </General>
+    </Mapping>
+
+  </FieldMappings>
+
+</MessageMapping>

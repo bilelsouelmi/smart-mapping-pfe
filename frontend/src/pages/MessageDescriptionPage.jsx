@@ -1,10 +1,22 @@
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ChevronDown, ChevronRight, Plus, Edit2, Trash2, RefreshCw, FileText, Layers, X, Check, Upload, Shield } from 'lucide-react';
+import { toast } from 'react-toastify';
+import { ChevronDown, ChevronRight, Plus, Edit2, Trash2, RefreshCw, FileText, Layers, X, Check, Upload, Shield, KeyRound, ArrowLeft } from 'lucide-react';
 import Layout from '../components/Layout';
+import WorkflowSteps from '../components/WorkflowSteps';
+import { useAuth } from '../contexts/AuthContext';
+import { PENDING_APPROVALS_CHANGED_EVENT } from '../constants/events';
 
 const API = 'http://localhost:8000/api';
+
+// Notifies Layout.jsx's sidebar badge to refetch immediately instead of
+// waiting for its 30s poll — otherwise approving/rejecting something here
+// leaves a visibly stale count until the next tick, which reads as "did
+// this actually work?" rather than a smooth, immediate confirmation.
+const notifyPendingApprovalsChanged = () => {
+  window.dispatchEvent(new Event(PENDING_APPROVALS_CHANGED_EVENT));
+};
 
 const ELEMENT_TYPES = ['STRING', 'INTEGER', 'DECIMAL', 'DATE', 'CODE', 'COMPOSITE', 'BOOLEAN'];
 const PATTERNS = [
@@ -17,6 +29,7 @@ const PATTERNS = [
 ];
 
 const MessageDescriptionPage = () => {
+  const { user } = useAuth();
   const [selectedMD, setSelectedMD] = useState(null);
   const [elements, setElements] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -29,7 +42,62 @@ const MessageDescriptionPage = () => {
   const [dragOver, setDragOver] = useState(false);
   const [uploadedFile, setUploadedFile] = useState(null);
   const [settingStandard, setSettingStandard] = useState(false);
+  const [approving, setApproving] = useState(false);
+  const [pendingList, setPendingList] = useState([]);
+  const [loadingPending, setLoadingPending] = useState(false);
+  const [showAccessRequestModal, setShowAccessRequestModal] = useState(false);
+  const [accessRequestAction, setAccessRequestAction] = useState('delete');
+  const [accessRequestReason, setAccessRequestReason] = useState('');
+  const [requestingAccess, setRequestingAccess] = useState(false);
   const fileInputRef = useRef(null);
+
+  // The notification badge in the sidebar links here promising "N pending
+  // approvals" to review, but until now this page had no way to actually
+  // BROWSE an existing Message Description — only upload a brand new one.
+  // Fetch the pending ones (admin-only, mirrors the maker-checker gate in
+  // message_descriptions.py) so clicking the badge leads somewhere useful.
+  useEffect(() => {
+    if (selectedMD || !user?.is_admin) return;
+    const fetchPending = async () => {
+      setLoadingPending(true);
+      try {
+        const r = await axios.get(`${API}/message-descriptions/`);
+        const pending = (r.data || []).filter(
+          md => md.approved === null && md.column_structure && md.column_structure.length > 0
+        );
+        setPendingList(pending);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoadingPending(false);
+      }
+    };
+    fetchPending();
+  }, [selectedMD, user?.is_admin]);
+
+  // Approved references, browsable by EVERYONE (not admin-gated like the
+  // pending list above) — otherwise there was no way for a regular user
+  // to even find an existing approved Message Description to view it,
+  // let alone use the new "Request Access" button on one.
+  const [approvedList, setApprovedList] = useState([]);
+  const [loadingApproved, setLoadingApproved] = useState(false);
+
+  useEffect(() => {
+    if (selectedMD) return;
+    const fetchApproved = async () => {
+      setLoadingApproved(true);
+      try {
+        const r = await axios.get(`${API}/message-descriptions/`);
+        const approved = (r.data || []).filter(md => md.approved === true);
+        setApprovedList(approved);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoadingApproved(false);
+      }
+    };
+    fetchApproved();
+  }, [selectedMD]);
 
   // Restore state from sessionStorage on mount
   useEffect(() => {
@@ -82,7 +150,7 @@ const MessageDescriptionPage = () => {
     } catch (e) {
       const errMsg = e.response?.data?.detail || e.message || 'Upload failed';
       if (!errMsg.includes('LLM') && !errMsg.includes('JSON')) {
-        alert('❌ ' + errMsg);
+        toast.error(errMsg);
       }
     } finally {
       setUploading(false);
@@ -96,19 +164,101 @@ const MessageDescriptionPage = () => {
     if (file) handleFileUpload(file);
   };
 
-  const handleParse = async () => {
+  const handleGenerate = async () => {
     if (!selectedMD) return;
     setImporting(true);
-    const isSWIFT = selectedMD.mt_type || selectedMD.file_type === 'XML_MT';
-    const endpoint = isSWIFT
+    // "import-from-blocks" builds a real hierarchical tree from
+    // mt_blocks/sub_fields — populated for BOTH SWIFT MT text (block4
+    // tags) and ISO 20022 XML (dotted XML paths, via
+    // extract_xml_source_fields in file_processor.py). Anything with a
+    // detected mt_type — whichever side was actually uploaded — has that
+    // structure; only truly generic tabular files (CSV/JSON/Excel, no
+    // mt_type) fall back to the flat column importer.
+    const isStructuredMessage = selectedMD.mt_type || selectedMD.file_type === 'XML_MT';
+    const endpoint = isStructuredMessage
       ? `${API}/message-descriptions/${selectedMD.id}/elements/import-from-blocks`
       : `${API}/message-descriptions/${selectedMD.id}/elements/import-from-columns`;
     try {
       await axios.post(endpoint);
       await fetchElements(selectedMD.id);
+      // ── Auto Set as Standard after generation ──────────────────────────────
+      // Rules are saved to DB automatically — no manual click needed
+      await axios.post(`${API}/validation/validation-rules/import-from-md/${selectedMD.id}`);
     } catch (e) {
-      alert(e.response?.data?.detail || 'Parse failed');
+      toast.error(e.response?.data?.detail || 'Generation failed');
     } finally { setImporting(false); }
+  };
+
+  const handleApprove = async () => {
+    if (!selectedMD) return;
+    setApproving(true);
+    try {
+      const r = await axios.put(`${API}/message-descriptions/${selectedMD.id}`, { approved: true });
+      setSelectedMD(r.data);
+      toast.success(`✅ Approved — "${r.data.file_name}" is now the reference for ${r.data.mt_type || r.data.file_type}`);
+      notifyPendingApprovalsChanged();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Approve failed');
+    } finally { setApproving(false); }
+  };
+
+  const handleReject = async () => {
+    if (!selectedMD) return;
+    if (!window.confirm(
+      `Reject and discard "${selectedMD.file_name}"? This deletes the generated Message Description ` +
+      `(and its elements) entirely — it will not be saved. This cannot be undone.`
+    )) return;
+    setApproving(true);
+    try {
+      await axios.delete(`${API}/message-descriptions/${selectedMD.id}`);
+      toast.info(`Rejected and discarded "${selectedMD.file_name}"`);
+      notifyPendingApprovalsChanged();
+      handleNewFile();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Reject failed');
+    } finally { setApproving(false); }
+  };
+
+  // Same underlying DELETE as handleReject, but for an ALREADY-approved MD
+  // — Reject's button only shows pre-approval (approved !== true), so this
+  // covers "I approved it, but actually I want it gone" after the fact.
+  const handleDeleteMD = async () => {
+    if (!selectedMD) return;
+    if (!window.confirm(
+      `Delete "${selectedMD.file_name}" from the database? This removes the approved Message Description ` +
+      `and its elements entirely, and it will no longer be usable as a reference anywhere ` +
+      `(mappings, validation). This cannot be undone.`
+    )) return;
+    setApproving(true);
+    try {
+      await axios.delete(`${API}/message-descriptions/${selectedMD.id}`);
+      toast.info(`Deleted "${selectedMD.file_name}"`);
+      notifyPendingApprovalsChanged();
+      handleNewFile();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Delete failed');
+    } finally { setApproving(false); }
+  };
+
+  // Non-admins can't act directly on an already-approved reference (see
+  // the access-grant gate in message_descriptions.py) — this submits a
+  // request an admin reviews from the Access Requests tab on the Admin
+  // page. One-time-use once granted: exercising it consumes the grant.
+  const handleRequestAccess = async () => {
+    if (!selectedMD) return;
+    setRequestingAccess(true);
+    try {
+      await axios.post(`${API}/access-requests/`, {
+        message_description_id: selectedMD.id,
+        action_requested: accessRequestAction,
+        reason: accessRequestReason || null,
+      });
+      toast.success('Access request sent — an admin will review it.');
+      setShowAccessRequestModal(false);
+      setAccessRequestReason('');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Request failed');
+    } finally { setRequestingAccess(false); }
   };
 
   const handleSetAsStandard = async () => {
@@ -117,9 +267,9 @@ const MessageDescriptionPage = () => {
     setSettingStandard(true);
     try {
       const r = await axios.post(`${API}/validation/validation-rules/import-from-md/${selectedMD.id}`);
-      alert(`✅ ${r.data.message}`);
+      toast.success(r.data.message);
     } catch (e) {
-      alert(e.response?.data?.detail || 'Failed to set as standard');
+      toast.error(e.response?.data?.detail || 'Failed to set as standard');
     } finally { setSettingStandard(false); }
   };
 
@@ -128,7 +278,8 @@ const MessageDescriptionPage = () => {
     setElements([]);
     setUploadedFile(null);
     sessionStorage.removeItem('md_page_state');
-    sessionStorage.removeItem('validate_page_state'); 
+    sessionStorage.removeItem('validate_page_state');
+    window.dispatchEvent(new CustomEvent('validate-reset'));
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -137,7 +288,7 @@ const MessageDescriptionPage = () => {
     try {
       await axios.delete(`${API}/message-descriptions/${selectedMD.id}/elements/${elementId}`);
       fetchElements(selectedMD.id);
-    } catch (e) { alert('Delete failed'); }
+    } catch (e) { toast.error('Delete failed'); }
   };
 
   const handleOpenCreate = (parentId = null) => {
@@ -165,7 +316,7 @@ const MessageDescriptionPage = () => {
       setShowModal(false);
       fetchElements(selectedMD.id);
     } catch (e) {
-      alert(e.response?.data?.detail || 'Save failed');
+      toast.error(e.response?.data?.detail || 'Save failed');
     }
   };
 
@@ -178,6 +329,8 @@ const MessageDescriptionPage = () => {
       }}>
         <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
 
+          <WorkflowSteps current="md" />
+
           {/* Header */}
           <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }}
             style={{ marginBottom: '2rem', textAlign: 'center' }}>
@@ -189,9 +342,134 @@ const MessageDescriptionPage = () => {
               📋 Message Description
             </h1>
             <p style={{ color: '#a0a0a0', fontSize: '1rem' }}>
-              Hierarchical field structure of SWIFT MT messages
+              Step 1 — Upload a sample file, Generate MD, then Approve it as the reference for this message type
             </p>
           </motion.div>
+
+          {/* Pending approvals — admin-only, shown above the upload zone
+              so the sidebar notification badge actually leads somewhere
+              (previously this page had no way to browse an existing MD
+              at all, only upload a new one). */}
+          {!selectedMD && user?.is_admin && loadingPending && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ marginBottom: '1.5rem' }}>
+              <GlassCard>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {[0, 1].map(i => (
+                    <div key={i} style={{
+                      height: '52px', borderRadius: '10px',
+                      background: 'linear-gradient(90deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.07) 50%, rgba(255,255,255,0.03) 100%)',
+                      backgroundSize: '200% 100%', animation: 'shimmer 1.4s ease-in-out infinite'
+                    }} />
+                  ))}
+                </div>
+              </GlassCard>
+            </motion.div>
+          )}
+
+          {!selectedMD && user?.is_admin && !loadingPending && pendingList.length > 0 && (
+            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+              style={{ marginBottom: '1.5rem' }}>
+              <GlassCard>
+                <div style={{ color: '#f59e0b', fontWeight: '700', fontSize: '0.95rem', marginBottom: '1rem' }}>
+                  🔔 {pendingList.length} pending approval{pendingList.length > 1 ? 's' : ''}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <AnimatePresence>
+                    {pendingList.map((md, i) => (
+                      <motion.div key={md.id}
+                        initial={{ opacity: 0, x: -10 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, x: 10 }}
+                        transition={{ delay: i * 0.04 }}
+                        whileHover={{ background: 'rgba(245,158,11,0.12)', borderColor: 'rgba(245,158,11,0.4)', x: 2 }}
+                        whileTap={{ scale: 0.99 }}
+                        onClick={() => setSelectedMD(md)}
+                        style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          padding: '0.75rem 1rem', borderRadius: '10px', cursor: 'pointer',
+                          background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)',
+                          transition: 'border-color 0.15s'
+                        }}>
+                        <div>
+                          <span style={{ color: 'white', fontWeight: '600', fontSize: '0.9rem' }}>{md.file_name}</span>
+                          <span style={{ color: '#6b7280', fontSize: '0.8rem', marginLeft: '0.75rem' }}>
+                            {md.mt_type || md.file_type} {md.iso_target ? `→ ${md.iso_target}` : ''}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span style={{ color: '#6b7280', fontSize: '0.78rem' }}>
+                            proposed by {md.proposed_by_username || '—'}
+                          </span>
+                          <ChevronRight size={14} color="#6b7280" />
+                        </div>
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
+                </div>
+              </GlassCard>
+            </motion.div>
+          )}
+
+          {/* Approved references — browsable by everyone, so a non-admin
+              can actually find one to view, or to use "Request Access"
+              on (see the modal below). Loading skeleton mirrors the
+              pending-approvals one above. */}
+          {!selectedMD && loadingApproved && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ marginBottom: '1.5rem' }}>
+              <GlassCard>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {[0, 1].map(i => (
+                    <div key={i} style={{
+                      height: '52px', borderRadius: '10px',
+                      background: 'linear-gradient(90deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.07) 50%, rgba(255,255,255,0.03) 100%)',
+                      backgroundSize: '200% 100%', animation: 'shimmer 1.4s ease-in-out infinite'
+                    }} />
+                  ))}
+                </div>
+              </GlassCard>
+            </motion.div>
+          )}
+
+          {!selectedMD && !loadingApproved && approvedList.length > 0 && (
+            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+              style={{ marginBottom: '1.5rem' }}>
+              <GlassCard>
+                <div style={{ color: '#10b981', fontWeight: '700', fontSize: '0.95rem', marginBottom: '1rem' }}>
+                  ✅ {approvedList.length} approved reference{approvedList.length > 1 ? 's' : ''}
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {approvedList.map((md, i) => (
+                    <motion.div key={md.id}
+                      initial={{ opacity: 0, x: -10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: i * 0.03 }}
+                      whileHover={{ background: 'rgba(16,185,129,0.12)', borderColor: 'rgba(16,185,129,0.4)', x: 2 }}
+                      whileTap={{ scale: 0.99 }}
+                      onClick={() => setSelectedMD(md)}
+                      style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        padding: '0.75rem 1rem', borderRadius: '10px', cursor: 'pointer',
+                        background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.2)',
+                        transition: 'border-color 0.15s'
+                      }}>
+                      <div>
+                        <span style={{ color: 'white', fontWeight: '600', fontSize: '0.9rem' }}>{md.file_name}</span>
+                        <span style={{ color: '#6b7280', fontSize: '0.8rem', marginLeft: '0.75rem' }}>
+                          {md.mt_type || md.file_type} {md.iso_target ? `→ ${md.iso_target}` : ''}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{ color: '#6b7280', fontSize: '0.78rem' }}>
+                          approved by {md.approved_by_username || '—'}
+                        </span>
+                        <ChevronRight size={14} color="#6b7280" />
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              </GlassCard>
+            </motion.div>
+          )}
 
           {/* Upload Zone — shown when no file selected */}
           {!selectedMD && (
@@ -210,25 +488,25 @@ const MessageDescriptionPage = () => {
                     transition: 'all 0.2s'
                   }}
                 >
-                  <input ref={fileInputRef} type="file" accept=".txt,.xml,.csv,.json,.xlsx"
+                  <input ref={fileInputRef} type="file" accept=".txt,.xml,.csv,.json,.xlsx,.xls"
                     style={{ display: 'none' }}
                     onChange={e => handleFileUpload(e.target.files[0])} />
                   {uploading ? (
                     <div style={{ color: '#06b6d4' }}>
                       <div className="spinner" style={{ margin: '0 auto 1rem', width: '32px', height: '32px', borderWidth: '3px' }} />
-                      <div style={{ fontSize: '1.1rem', fontWeight: '600' }}>Parsing {uploadedFile}...</div>
+                      <div style={{ fontSize: '1.1rem', fontWeight: '600' }}>Generating {uploadedFile}...</div>
                     </div>
                   ) : (
                     <>
                       <Upload size={48} color="#06b6d4" style={{ margin: '0 auto 1rem' }} />
                       <div style={{ color: 'white', fontSize: '1.3rem', fontWeight: '700', marginBottom: '0.5rem' }}>
-                        Upload SWIFT File
+                        Upload SWIFT MT or ISO 20022 XML File
                       </div>
                       <div style={{ color: '#6b7280', fontSize: '0.9rem' }}>
                         Drop your file here or click to browse
                       </div>
                       <div style={{ color: '#4b5563', fontSize: '0.8rem', marginTop: '0.5rem' }}>
-                        Supports .txt .xml .csv .json .xlsx
+                        SWIFT MT (.txt) and ISO 20022 XML both build a full Message Description — either direction works. Also supports plain .csv .json .xlsx .xls for generic column mapping.
                       </div>
                     </>
                   )}
@@ -253,26 +531,133 @@ const MessageDescriptionPage = () => {
                       display: 'flex', alignItems: 'center', gap: '8px'
                     }}>
                       <FileText size={14} color="#06b6d4" />
+                      {/* Badge order reflects what was actually uploaded, not
+                          always "MT -> ISO": an XML_ISO20022 upload is the
+                          ISO side, so it's shown first with the MT type as
+                          the arrow target — the reverse of an MT/text
+                          upload. Otherwise this always displayed
+                          "MT202 -> pacs.009.001.08" even when the user
+                          uploaded the pacs.009 XML itself. */}
                       <span style={{ color: '#06b6d4', fontWeight: '700', fontSize: '14px' }}>
-                        {selectedMD.mt_type || selectedMD.file_name}
+                        {selectedMD.file_type === 'XML_ISO20022'
+                          ? (selectedMD.iso_target || selectedMD.file_name)
+                          : (selectedMD.mt_type || selectedMD.file_name)}
                       </span>
-                      {selectedMD.iso_target && (
-                        <span style={{ color: '#4b5563', fontSize: '11px' }}>
-                          → {selectedMD.iso_target}
-                        </span>
+                      {selectedMD.file_type === 'XML_ISO20022' ? (
+                        selectedMD.mt_type && (
+                          <span style={{ color: '#4b5563', fontSize: '11px' }}>
+                            → {selectedMD.mt_type}
+                          </span>
+                        )
+                      ) : (
+                        selectedMD.iso_target && (
+                          <span style={{ color: '#4b5563', fontSize: '11px' }}>
+                            → {selectedMD.iso_target}
+                          </span>
+                        )
                       )}
                     </div>
+
+                    {/* Approval status — only meaningful once there's a
+                        generated structure to approve or not. */}
+                    {elements.length > 0 && (
+                      selectedMD.approved ? (
+                        <div style={{
+                          padding: '6px 14px', background: 'rgba(16,185,129,0.1)',
+                          border: '1px solid rgba(16,185,129,0.3)', borderRadius: '8px',
+                          display: 'flex', alignItems: 'center', gap: '6px'
+                        }}>
+                          <Check size={14} color="#10b981" />
+                          <span style={{ color: '#10b981', fontWeight: '700', fontSize: '13px' }}>Approved</span>
+                        </div>
+                      ) : (
+                        <div style={{
+                          padding: '6px 14px', background: 'rgba(245,158,11,0.1)',
+                          border: '1px solid rgba(245,158,11,0.3)', borderRadius: '8px',
+                          color: '#f59e0b', fontWeight: '700', fontSize: '13px'
+                        }}>
+                          ⏳ Pending Approval
+                        </div>
+                      )
+                    )}
+
+                    {/* Maker-checker: who proposed vs who approved — and,
+                        while pending, a heads-up that the proposer can't
+                        also be the approver, before they hit the button
+                        and get a 403. */}
+                    {elements.length > 0 && selectedMD.proposed_by_username && (
+                      <div style={{ color: '#6b7280', fontSize: '11px', marginTop: '4px' }}>
+                        Proposed by <strong>{selectedMD.proposed_by_username}</strong>
+                        {selectedMD.approved && selectedMD.approved_by_username && (
+                          <> · Approved by <strong>{selectedMD.approved_by_username}</strong></>
+                        )}
+                        {!selectedMD.approved && user?.username === selectedMD.proposed_by_username && (
+                          <span style={{ color: '#f59e0b' }}> — you proposed this, a different user must approve it</span>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    {/* Parse button */}
+                    {/* Generate MD button */}
                     <ActionBtn
                       icon={<RefreshCw size={14} />}
-                      label={importing ? 'Parsing...' : 'Parse'}
+                      label={importing ? 'Generating...' : 'Generate MD'}
                       color="#06b6d4"
-                      onClick={handleParse}
+                      onClick={handleGenerate}
                       disabled={importing}
                     />
+                    {/* Approve / Reject — the explicit save-or-discard gate:
+                        elements are already persisted the moment Generate MD
+                        runs, so "reject" doesn't prevent a DB write, it
+                        undoes one — deleting the MD and its elements so
+                        nothing unapproved lingers as a selectable reference
+                        elsewhere (New Mapping, Validate, Generate Elements). */}
+                    {elements.length > 0 && !selectedMD.approved && (
+                      <>
+                        <ActionBtn
+                          icon={<Check size={14} />}
+                          label={approving ? 'Working...' : 'Approve'}
+                          color="#10b981"
+                          onClick={handleApprove}
+                          disabled={approving}
+                        />
+                        <ActionBtn
+                          icon={<X size={14} />}
+                          label={approving ? 'Working...' : 'Reject'}
+                          color="#ef4444"
+                          onClick={handleReject}
+                          disabled={approving}
+                        />
+                      </>
+                    )}
+                    {/* Delete — for an MD already approved. Approve/Reject
+                        above only appear pre-approval (Reject IS the
+                        discard action at that stage); once approved, this
+                        is the equivalent "remove it from the database"
+                        action for changing your mind afterward. */}
+                    {elements.length > 0 && selectedMD.approved && user?.is_admin && (
+                      <ActionBtn
+                        icon={<Trash2 size={14} />}
+                        label={approving ? 'Working...' : 'Delete'}
+                        color="#ef4444"
+                        onClick={handleDeleteMD}
+                        disabled={approving}
+                      />
+                    )}
+                    {/* Non-admins can't act on an approved reference
+                        directly — see the access-grant gate in
+                        message_descriptions.py — so instead of Delete
+                        they get a way to ask an admin for it. */}
+                    {elements.length > 0 && selectedMD.approved && !user?.is_admin && (
+                      <ActionBtn
+                        icon={<KeyRound size={14} />}
+                        label="Request Access"
+                        color="#06b6d4"
+                        onClick={() => setShowAccessRequestModal(true)}
+                        disabled={approving}
+                      />
+                    )}
                     {/* Add Element */}
                     <ActionBtn
                       icon={<Plus size={14} />}
@@ -280,14 +665,7 @@ const MessageDescriptionPage = () => {
                       color="#667eea"
                       onClick={() => handleOpenCreate(null)}
                     />
-                    {/* Set as Standard */}
-                    <ActionBtn
-                      icon={<Shield size={14} />}
-                      label={settingStandard ? 'Setting...' : 'Set as Standard'}
-                      color="#10b981"
-                      onClick={handleSetAsStandard}
-                      disabled={settingStandard || elements.length === 0}
-                    />
+
                     {/* New File */}
                     <ActionBtn
                       icon={<Upload size={14} />}
@@ -296,6 +674,19 @@ const MessageDescriptionPage = () => {
                       onClick={handleNewFile}
                     />
                   </div>
+                </div>
+
+                {/* Back — returns to the browse view (approved
+                    references / pending approvals list) without implying
+                    "upload something new" the way the button above does.
+                    Same reset under the hood, different intent. */}
+                <div style={{ marginTop: '0.75rem' }}>
+                  <ActionBtn
+                    icon={<ArrowLeft size={14} />}
+                    label="Back"
+                    color="#6b7280"
+                    onClick={handleNewFile}
+                  />
                 </div>
 
                 {/* Tree */}
@@ -309,7 +700,7 @@ const MessageDescriptionPage = () => {
                     <Layers size={48} color="#374151" style={{ margin: '0 auto 1rem' }} />
                     <p style={{ color: '#6b7280', marginBottom: '0.5rem' }}>No elements yet</p>
                     <p style={{ color: '#4b5563', fontSize: '0.85rem' }}>
-                      Click <strong style={{ color: '#06b6d4' }}>Parse</strong> to generate elements automatically.
+                      Click <strong style={{ color: '#06b6d4' }}>Generate MD</strong> to generate elements automatically.
                     </p>
                   </div>
                 ) : (
@@ -335,6 +726,7 @@ const MessageDescriptionPage = () => {
             display: inline-block;
           }
           @keyframes spin { to { transform: rotate(360deg); } }
+          @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
         `}</style>
       </div>
 
@@ -342,6 +734,70 @@ const MessageDescriptionPage = () => {
         {showModal && (
           <ElementModal mode={modalMode} element={modalElement}
             onSave={handleSave} onClose={() => setShowModal(false)} />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {showAccessRequestModal && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            style={{
+              position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 3000
+            }}
+            onClick={e => e.target === e.currentTarget && setShowAccessRequestModal(false)}>
+            <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+              style={{
+                background: '#1a1a2e', border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: '16px', padding: '1.75rem', width: '420px', maxWidth: '90vw'
+              }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '1.25rem' }}>
+                <KeyRound size={20} color="#06b6d4" />
+                <span style={{ color: 'white', fontWeight: '700', fontSize: '1.1rem' }}>Request Access</span>
+              </div>
+              <p style={{ color: '#9ca3af', fontSize: '0.85rem', marginBottom: '1.25rem' }}>
+                "{selectedMD?.file_name}" is already approved. An admin needs to grant you
+                one-time permission before you can act on it.
+              </p>
+
+              <label style={{ color: '#9ca3af', fontSize: '0.8rem', display: 'block', marginBottom: '6px' }}>
+                What do you want to do?
+              </label>
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '1rem' }}>
+                {['update', 'delete'].map(a => (
+                  <button key={a} onClick={() => setAccessRequestAction(a)} style={{
+                    flex: 1, padding: '8px', borderRadius: '8px', cursor: 'pointer',
+                    fontWeight: '700', fontSize: '0.85rem', textTransform: 'capitalize',
+                    background: accessRequestAction === a ? 'rgba(6,182,212,0.15)' : 'rgba(255,255,255,0.04)',
+                    border: `1px solid ${accessRequestAction === a ? '#06b6d4' : 'rgba(255,255,255,0.1)'}`,
+                    color: accessRequestAction === a ? '#06b6d4' : '#9ca3af'
+                  }}>{a}</button>
+                ))}
+              </div>
+
+              <label style={{ color: '#9ca3af', fontSize: '0.8rem', display: 'block', marginBottom: '6px' }}>
+                Reason (optional)
+              </label>
+              <textarea value={accessRequestReason} onChange={e => setAccessRequestReason(e.target.value)}
+                placeholder="Why do you need this?"
+                style={{
+                  width: '100%', minHeight: '70px', padding: '0.6rem', borderRadius: '8px',
+                  background: '#0f0f23', border: '1px solid rgba(255,255,255,0.1)',
+                  color: 'white', fontSize: '0.85rem', resize: 'vertical', boxSizing: 'border-box'
+                }} />
+
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
+                <button onClick={() => setShowAccessRequestModal(false)} style={{
+                  padding: '8px 16px', background: 'transparent', border: '1px solid rgba(255,255,255,0.1)',
+                  borderRadius: '8px', color: '#9ca3af', cursor: 'pointer'
+                }}>Cancel</button>
+                <button onClick={handleRequestAccess} disabled={requestingAccess} style={{
+                  padding: '8px 18px', background: 'linear-gradient(135deg, #06b6d4, #0891b2)',
+                  border: 'none', borderRadius: '8px', color: 'white', fontWeight: '700',
+                  cursor: 'pointer', opacity: requestingAccess ? 0.6 : 1
+                }}>{requestingAccess ? 'Sending...' : 'Send Request'}</button>
+              </div>
+            </motion.div>
+          </motion.div>
         )}
       </AnimatePresence>
     </Layout>
@@ -390,7 +846,7 @@ const TreeNode = ({ element, depth, onEdit, onDelete, onAddChild }) => {
         )}
 
         <span style={{ color: isHeader ? '#6ee7b7' : '#e2e8f0', fontSize: '13px', flex: 1 }}>
-          {element.name}
+          {element.name === element.field_tag ? null : element.name}
           {element.description && element.description !== element.name && (
             <span style={{ color: '#4b5563', fontSize: '10px', marginLeft: '6px' }}>
               — {element.description}
@@ -567,7 +1023,7 @@ const ElementModal = ({ mode, element, onSave, onClose }) => {
             Close
           </button>
           <button onClick={() => {
-            if (!form.name) { alert('Name is required'); return; }
+            if (!form.name) { toast.error('Name is required'); return; }
             onSave({
               ...form,
               min_length: form.min_length !== '' ? parseInt(form.min_length) : null,

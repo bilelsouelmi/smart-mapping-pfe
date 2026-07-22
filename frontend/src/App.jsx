@@ -2,34 +2,40 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
-import StandardElementsPage from './pages/StandardElementsPage';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import DashboardPage from './pages/DashboardPage';
-import UploadPage from './pages/UploadPage';
-import MappingsPage from './pages/MappingsPage';
+import MappingWorkspacePage from './pages/MappingWorkspacePage';
+import ConfigPage from './pages/ConfigPage';
+import ConsommationPage from './pages/ConsommationPage';
 import OutputsPage from './pages/OutputsPage';
-import RAGSearch from './pages/RAGSearch';
 import MessageDescriptionPage from './pages/MessageDescriptionPage';
 import ValidatePage from './pages/ValidatePage';
+import AdminPage from './pages/AdminPage';
+import AuditLogPage from './pages/AuditLogPage';
 
-
-// Protected Route Component
+// ── Protected route: must be authenticated ────────────────────────────────────
 const ProtectedRoute = ({ children }) => {
   const { isAuthenticated, loading } = useAuth();
-
-  if (loading) {
-    return <div style={{ 
-      display: 'flex', 
-      justifyContent: 'center', 
-      alignItems: 'center', 
-      height: '100vh' 
-    }}>
+  if (loading) return (
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
       Loading...
-    </div>;
-  }
-
+    </div>
+  );
   return isAuthenticated ? children : <Navigate to="/login" />;
+};
+
+// ── Admin route: must be authenticated AND is_admin = true ───────────────────
+const AdminRoute = ({ children }) => {
+  const { isAuthenticated, loading, user } = useAuth();
+  if (loading) return (
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+      Loading...
+    </div>
+  );
+  if (!isAuthenticated) return <Navigate to="/login" />;
+  if (!user?.is_admin) return <Navigate to="/dashboard" />;
+  return children;
 };
 
 function App() {
@@ -37,93 +43,34 @@ function App() {
     <Router>
       <AuthProvider>
         <Routes>
-          {/* Public Routes */}
-          <Route path="/login" element={<LoginPage />} />
+          {/* Public routes */}
+          <Route path="/login"    element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
 
-          {/* Protected Routes */}
-          <Route
-            path="/dashboard"
-            element={
-              <ProtectedRoute>
-                <DashboardPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/upload"
-            element={
-              <ProtectedRoute>
-                <UploadPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/mappings"
-            element={
-              <ProtectedRoute>
-                <MappingsPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/standard-elements"
-            element={
-              <ProtectedRoute>
-                <StandardElementsPage />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/outputs"
-            element={
-              <ProtectedRoute>
-                <OutputsPage />
-              </ProtectedRoute>
-            }
-          />
-          {/* RAG Search Route */}
-          <Route
-            path="/rag-search"
-            element={
-              <ProtectedRoute>
-                <RAGSearch />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/message-descriptions"
-            element={
-              <ProtectedRoute>
-                <MessageDescriptionPage />
-              </ProtectedRoute>
-            }
-          />
-          {/* Validate Route */}
-          <Route
-            path="/validate"
-            element={
-              <ProtectedRoute>
-                <ValidatePage />
-              </ProtectedRoute>
-            }
-          />
+          {/* Protected routes — any authenticated user */}
+          <Route path="/dashboard"           element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
+          <Route path="/mappings"            element={<ProtectedRoute><MappingWorkspacePage /></ProtectedRoute>} />
+          <Route path="/config"              element={<ProtectedRoute><ConfigPage /></ProtectedRoute>} />
+          <Route path="/pipeline"            element={<ProtectedRoute><ConsommationPage /></ProtectedRoute>} />
+          <Route path="/outputs"             element={<ProtectedRoute><OutputsPage /></ProtectedRoute>} />
+          <Route path="/message-descriptions" element={<ProtectedRoute><MessageDescriptionPage /></ProtectedRoute>} />
+          <Route path="/validate"            element={<ProtectedRoute><ValidatePage /></ProtectedRoute>} />
 
-          {/* Redirect root to dashboard or login */}
+          {/* Legacy redirects: standalone transform pages merged into /mappings
+              (Mapping Workspace's "Transform" button, auto-detects direction) */}
+          <Route path="/upload" element={<Navigate to="/mappings" />} />
+          <Route path="/transform" element={<Navigate to="/mappings" />} />
+          <Route path="/generate-mt" element={<Navigate to="/mappings" />} />
+
+          {/* Admin-only routes */}
+          <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
+          <Route path="/audit-log" element={<AdminRoute><AuditLogPage /></AdminRoute>} />
+
+          {/* Default redirect */}
           <Route path="/" element={<Navigate to="/dashboard" />} />
         </Routes>
-
-        <ToastContainer
-          position="top-right"
-          autoClose={3000}
-          hideProgressBar={false}
-          newestOnTop
-          closeOnClick
-          rtl={false}
-          pauseOnFocusLoss
-          draggable
-          pauseOnHover
-        />
+        <ToastContainer position="top-right" autoClose={3000} hideProgressBar={false}
+          newestOnTop closeOnClick rtl={false} pauseOnFocusLoss draggable pauseOnHover />
       </AuthProvider>
     </Router>
   );

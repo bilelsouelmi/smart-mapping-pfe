@@ -16,6 +16,24 @@ const MTBlockReview = ({ analysisResult, onConfirmed, onRegenerate }) => {
         `http://localhost:8000/api/files/${analysisResult.id}/mt-blocks`,
         blocks
       );
+
+      // ── FIX: auto-generate MessageDescriptionElement rows ──────────────────
+      // Without this call, MT .txt uploads never get block4 broken down into
+      // proper MessageDescriptionElement rows (only XML uploads did, via a
+      // different path). "Generate Elements" in the Mapping module silently
+      // falls back to ANY other MessageDescription sharing the same mt_type
+      // when this is missing — which can pick up an unrelated file's data.
+      // Calling import-from-blocks here closes that gap automatically, so
+      // every MT upload is immediately ready for mapping without a manual
+      // Swagger call.
+      try {
+        await axios.post(
+          `http://localhost:8000/api/message-descriptions/${analysisResult.id}/elements/import-from-blocks`
+        );
+      } catch (importErr) {
+        console.warn('import-from-blocks failed (non-critical):', importErr);
+      }
+
       onConfirmed(blocks);
     } catch (e) {
       alert('Failed to save blocks');
@@ -80,6 +98,17 @@ const MTBlockReview = ({ analysisResult, onConfirmed, onRegenerate }) => {
     }
   };
 
+  // Sort block tags numerically (block1, block2, block3...) so the display
+  // always follows real SWIFT MT structure order, regardless of whatever
+  // order the backend parser inserted them into the dict (insertion order
+  // is not guaranteed to match the logical block sequence).
+  const sortedEntries = Object.entries(blocks).sort(([tagA], [tagB]) => {
+    const numA = parseInt(tagA.replace(/\D/g, ''), 10);
+    const numB = parseInt(tagB.replace(/\D/g, ''), 10);
+    if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+    return tagA.localeCompare(tagB);
+  });
+
   return (
     <div style={{
       background: 'rgba(255,255,255,0.05)',
@@ -141,7 +170,7 @@ const MTBlockReview = ({ analysisResult, onConfirmed, onRegenerate }) => {
       {/* Blocks Grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1rem' }}>
         <AnimatePresence>
-          {Object.entries(blocks).map(([tag, block]) => (
+          {sortedEntries.map(([tag, block]) => (
             <motion.div
               key={tag}
               initial={{ opacity: 0, scale: 0.95 }}

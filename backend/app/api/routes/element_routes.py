@@ -322,8 +322,7 @@ async def import_from_mt_blocks(
 
     # SWIFT standard field order
     BLOCK1_ORDER = ["ApplicationIdentifier", "ServiceIdentifier", "LogicalTerminalAddress", "SessionNumber", "SequenceNumber"]
-    BLOCK2INPUT_ORDER = ["InputOutputIdentifier", "MessageType", "DestinationAddress", "Priority", "DeliveryMonitoring", "ObsolescencePeriod"]
-    BLOCK2OUTPUT_ORDER = ["InputOutputIdentifier", "MessageType", "InputTime", "InputDate", "LogicalTerminalAddress", "SessionNumber", "SequenceNumber", "OutputDate", "OutputTime", "Priority"]
+    BLOCK2_ORDER = ["InputOutputIdentifier", "MessageType", "DestinationAddress", "Priority", "DeliveryMonitoring", "ObsolescencePeriod", "InputTime", "InputDate", "OutputDate", "OutputTime"]
 
     def sort_sub_fields(sub_fields, order_list):
         """Sort sub_fields dict according to a predefined order list."""
@@ -378,7 +377,22 @@ async def import_from_mt_blocks(
         my_idx = len(all_elements)
         all_elements.append({
             "name": name,
-            "tag": tag if depth == 0 else None,
+            # Block containers (block1..block5, depth 0) always keep their tag
+            # so generate_mapping_elements can find "block4" by field_tag.
+            # Nested elements only keep theirs when it's a real SWIFT field tag
+            # (":57A", ":32A"...) — composite sub-components like "Date" or
+            # "ApplicationIdentifier" are not independent tags and stay
+            # untagged. Without this, every business field nested under
+            # block4 (i.e. every SWIFT field in a .txt upload) lost its
+            # field_tag entirely, forcing Mapping's resolve_tag() to guess
+            # from the display name via an incomplete name_to_tag dict —
+            # fields missing from that dict (e.g. "Account With Institution")
+            # silently failed to map even when RAG data existed for them.
+            # A dotted, colon-free tag (e.g. "CdtTrfTxInf.Dbtr.Nm") is the
+            # XML-direction equivalent — extract_xml_source_fields() already
+            # flattens the whole XML tree into these as dict keys, so real
+            # SWIFT tags (":57A") and XML paths never collide.
+            "tag": tag if (depth == 0 or tag.startswith(':') or '.' in tag) else None,
             "element_type": element_type,
             "fin_format": fin_format,
             "min_length": min_length,
@@ -402,9 +416,8 @@ async def import_from_mt_blocks(
                         ordered_sub[k] = sub_fields[k]
             elif name == "block1":
                 ordered_sub = sort_sub_fields(sub_fields, BLOCK1_ORDER)
-            elif name in ["block2Input", "block2Output"]:
-                order = BLOCK2INPUT_ORDER if name == "block2Input" else BLOCK2OUTPUT_ORDER
-                ordered_sub = sort_sub_fields(sub_fields, order)
+            elif name == "block2":
+                ordered_sub = sort_sub_fields(sub_fields, BLOCK2_ORDER)
             else:
                 ordered_sub = sub_fields
 

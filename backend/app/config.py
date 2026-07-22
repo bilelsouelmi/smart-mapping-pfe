@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     # File Upload
     UPLOAD_DIR: str = "uploads"
     MAX_FILE_SIZE: int = 50 * 1024 * 1024
+
+    # Pipeline auto-consumption — how often (seconds) the background
+    # scheduler polls each active Consommation pipeline's Config IN
+    PIPELINE_POLL_INTERVAL_SECONDS: int = 30
     
     class Config:
         env_file = ".env"

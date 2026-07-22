@@ -18,6 +18,7 @@ MT_TO_ISO_TARGET = {
     "MT103": "pacs.008.001.08",
     "MT202": "pacs.009.001.08",
     "MT940": "camt.053.001.08",
+    "MT950": "camt.053.001.08",
     "MT900": "camt.054.001.08",
     "MT910": "camt.054.001.08",
 }
@@ -26,7 +27,10 @@ MT_TO_ISO_TARGET = {
 MT_TYPE_SIGNATURES = {
     "MT103": ["20", "32A", "50K", "59", "71A"],
     "MT202": ["20", "21", "32A", "52A", "58A"],
-    "MT940": ["20", "25", "28C", "60F", "62F"],
+    "MT940": ["20", "25", "28C", "60F", "62F", "61"],
+    "MT950": ["20", "25", "28C", "60F", "62F"],
+    "MT900": ["20", "21", "25", "32A"],
+    "MT910": ["20", "21", "25", "32A", "50K"],
 }
 
 # Mapping files for each MT type
@@ -34,6 +38,9 @@ MT_MAPPING_FILES = {
     "MT103": "MT103_to_pacs008.xml",
     "MT202": "MT202_to_pacs009.xml",
     "MT940": "MT940_to_camt053.xml",
+    "MT950": "MT950_to_camt053.xml",
+    "MT900": "MT900_to_camt054.xml",
+    "MT910": "MT910_to_camt054.xml",
 }
 
 # Mappings directory
@@ -169,7 +176,18 @@ class SWIFTTextParser:
         try:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read(500)
-            has_tags = bool(re.search(r':\d{2}[A-Z]?:', content))
+            # An XML file is never SWIFT MT text, no matter what its content
+            # matches below — check this first. Without it, any ISO 20022
+            # XML this project generates gets misdetected as SWIFT: every
+            # such file has a <CreDtTm> ISO timestamp like "16:19:37", and
+            # its "19:" substring matches the tag regex below (":19:" looks
+            # exactly like a 2-digit SWIFT field tag).
+            if content.lstrip().startswith('<'):
+                return False
+            # Real SWIFT tags always start a line (e.g. ":20:REF123..."),
+            # so anchor to line-start — this is also what rules out
+            # embedded HH:MM:SS timestamps from matching in non-XML text.
+            has_tags = bool(re.search(r'(?m)^:\d{2}[A-Z]?:', content))
             has_header = '{1:' in content or '{4:' in content
             return has_tags or has_header
         except Exception:
@@ -197,7 +215,7 @@ class SWIFTTextParser:
             logger.info(f"Raw tags found: {list(raw_tags.keys())}")
 
             # Detect MT type from raw tags
-            mt_type = self._detect_mt_type(raw_tags)
+            mt_type = self._detect_mt_type(raw_tags, swift_blocks.get("block2", ""))
             logger.info(f"Detected MT type: {mt_type}")
 
             # Load tag definitions from XML
@@ -224,10 +242,8 @@ class SWIFTTextParser:
                 b2_val = swift_blocks["block2"]
                 if b2_val.startswith("I"):
                     b2_sub = self._parse_block2_input(b2_val)
-                    b2_inner_name = "block2Input"
                 else:
                     b2_sub = self._parse_block2_output(b2_val)
-                    b2_inner_name = "block2Output"
                 mt_blocks["block2"] = {
                     "tag": "block2",
                     "name": "block2",
@@ -235,16 +251,8 @@ class SWIFTTextParser:
                     "format": "35x",
                     "mandatory": True,
                     "value": b2_val,
-                    "sub_fields": {
-                        b2_inner_name: {
-                            "type": "map",
-                            "format": "35x",
-                            "value": b2_val,
-                            "sub_fields": b2_sub,
-                            "sub_fields_order": list(b2_sub.keys())
-                        }
-                    },
-                    "sub_fields_order": [b2_inner_name]
+                    "sub_fields": b2_sub,
+                    "sub_fields_order": list(b2_sub.keys())
                 }
 
             # Add block3 (user header) if present
@@ -352,8 +360,17 @@ class SWIFTTextParser:
 
     # ── Step 6: Detect MT type ────────────────────────────────────────────────
 
-    def _detect_mt_type(self, raw_tags: Dict[str, str]) -> str:
-        """Detect MT type based on tags present."""
+    def _detect_mt_type(self, raw_tags: Dict[str, str], block2: str = "") -> str:
+        """Detect MT type — first try block2 MessageType, then tag signatures."""
+        # Primary: extract MessageType from block2 (most reliable)
+        if block2:
+            # block2 format: I103BNPAFRPPXXXXN or O103...
+            m = re.match(r'^[IO](\d{3})', block2.strip())
+            if m:
+                mt_num = m.group(1)
+                return f"MT{mt_num}"
+
+        # Fallback: tag signature matching
         present = set(raw_tags.keys())
         best = "MT103"
         best_score = 0
@@ -362,6 +379,11 @@ class SWIFTTextParser:
             if score > best_score:
                 best_score = score
                 best = mt_type
+
+        # Disambiguate MT940 vs MT950: MT940 requires :61: transaction lines
+        if best == "MT940" and "61" not in present:
+            best = "MT950"
+
         return best
 
     # ── Step 7: Build blocks ──────────────────────────────────────────────────

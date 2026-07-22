@@ -11,26 +11,18 @@ class LLMService:
     """
     Service pour interagir avec Ollama (LLM local)
     """
-    
+
     def __init__(self, base_url: str = None, model: str = None):
         self.base_url = base_url or settings.OLLAMA_BASE_URL
         self.model = model or settings.OLLAMA_MODEL
         logger.info(f"LLM Service initialized - Model: {self.model}")
-    
+
     def generate(self, prompt: str, max_tokens: int = 1000, temperature: float = 0.3) -> str:
         """
         Génère une réponse avec Ollama
-        
-        Args:
-            prompt: Le prompt à envoyer au modèle
-            max_tokens: Nombre maximum de tokens
-            temperature: Température (0.0 = déterministe, 1.0 = créatif)
-            
-        Returns:
-            La réponse générée par le modèle
         """
         url = f"{self.base_url}/api/generate"
-        
+
         payload = {
             "model": self.model,
             "prompt": prompt,
@@ -40,18 +32,18 @@ class LLMService:
                 "num_predict": max_tokens
             }
         }
-        
+
         try:
             logger.info(f"Sending request to Ollama: {url}")
-            response = requests.post(url, json=payload, timeout=120)
+            response = requests.post(url, json=payload, timeout=180)
             response.raise_for_status()
-            
+
             result = response.json()
             generated_text = result.get("response", "")
-            
+
             logger.info(f"Ollama response received: {len(generated_text)} chars")
             return generated_text
-            
+
         except requests.exceptions.Timeout:
             logger.error("Ollama request timeout")
             raise Exception("LLM request timeout - model might be slow or unavailable")
@@ -61,7 +53,7 @@ class LLMService:
         except Exception as e:
             logger.error(f"Unexpected error: {e}")
             raise
-    
+
     def analyze_file_structure(
         self,
         columns: List[str],
@@ -70,14 +62,6 @@ class LLMService:
     ) -> Dict[str, Any]:
         """
         Analyse la structure d'un fichier et génère une MessageDescription
-        
-        Args:
-            columns: Liste des colonnes du fichier
-            sample_data: Échantillon de données (premières lignes)
-            file_type: Type de fichier (CSV, XML, JSON, Excel)
-            
-        Returns:
-            Dictionnaire avec l'analyse structurée
         """
         prompt = f"""You are a data analysis expert specialized in file structure analysis.
 
@@ -114,23 +98,22 @@ IMPORTANT: Return ONLY valid JSON with this exact structure:
 
 Return ONLY the JSON, no markdown, no explanation.
 """
-        
+
         response = self.generate(prompt, max_tokens=2000, temperature=0.2)
-        
-        # Extract JSON from response
+
         response = response.strip()
         if "```json" in response:
             response = response.split("```json")[1].split("```")[0].strip()
         elif "```" in response:
             response = response.split("```")[1].split("```")[0].strip()
-        
+
         try:
             return json.loads(response)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON: {e}")
             logger.error(f"Response was: {response[:500]}")
             raise ValueError(f"Invalid JSON response from LLM: {str(e)}")
-    
+
     def suggest_mapping(
         self,
         source_columns: List[str],
@@ -141,27 +124,17 @@ Return ONLY the JSON, no markdown, no explanation.
     ) -> Dict[str, Any]:
         """
         Suggère un mapping entre colonnes source et cible
-        
-        Args:
-            source_columns: Colonnes du fichier source
-            target_columns: Colonnes du système cible
-            sample_data: Échantillon de données source
-            business_domain: Domaine métier (optionnel)
-            similar_mappings: Mappings similaires trouvés par RAG (optionnel)
-            
-        Returns:
-            Dictionnaire avec les suggestions de mapping
         """
         context = ""
         if business_domain:
             context += f"\nBUSINESS DOMAIN: {business_domain}"
-        
+
         if similar_mappings:
             context += "\n\nSIMILAR MAPPINGS FROM KNOWLEDGE BASE:"
             for mapping in similar_mappings[:3]:
                 context += f"\n- {mapping.get('source_column')} → {mapping.get('target_column')}"
                 context += f"  (Type: {mapping.get('transformation_type')}, Success: {mapping.get('success_rate', 0):.0%})"
-        
+
         prompt = f"""You are a data mapping expert specialized in suggesting optimal field mappings.
 
 SOURCE COLUMNS: {', '.join(source_columns)}
@@ -208,23 +181,122 @@ IMPORTANT: Return ONLY valid JSON with this exact structure:
 
 Return ONLY the JSON, no markdown, no explanation.
 """
-        
+
         response = self.generate(prompt, max_tokens=2500, temperature=0.3)
-        
-        # Extract JSON
+
         response = response.strip()
         if "```json" in response:
             response = response.split("```json")[1].split("```")[0].strip()
         elif "```" in response:
             response = response.split("```")[1].split("```")[0].strip()
-        
+
         try:
             return json.loads(response)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON: {e}")
             logger.error(f"Response was: {response[:500]}")
             raise ValueError(f"Invalid JSON response from LLM: {str(e)}")
-    
+
+    def suggest_xml_mapping(
+        self,
+        mt_type: str,
+        iso_target: str,
+        source_fields: List[Dict[str, Any]],
+        formulas: Optional[List[Dict[str, Any]]] = None,
+        rag_context: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        Suggère des mappings XPath ISO 20022 pour des champs SWIFT MT,
+        en s'appuyant sur le contexte RAG (fragments XML similaires) et
+        les formules de transformation déjà acceptées par l'utilisateur.
+
+        Chaque champ est traité dans un appel LLM séparé (one-field-at-a-time)
+        pour éliminer tout risque de troncature JSON. Le matching se fait par
+        nom de champ (source_field_name) car field_tag est souvent vide en base.
+        """
+        all_elements: List[Dict[str, Any]] = []
+
+        formulas_context = ""
+        if formulas:
+            formulas_context = "\n\nACCEPTED TRANSFORMATION FORMULAS (use these rules when applicable):\n"
+            formulas_context += "\n".join(
+                f"- {f.get('source_path')} → {f.get('target_path')} "
+                f"[{f.get('transformation_type')}]: {f.get('transformation_rule')}"
+                for f in formulas
+            )
+
+        rag_block = ""
+        if rag_context:
+            rag_block = "\n\nREFERENCE ISO 20022 XML STRUCTURE (from knowledge base):\n"
+            rag_block += "\n---\n".join(rag_context[:3])
+
+        for f in source_fields:
+            field_name = f.get("name", "")
+            field_tag = f.get("tag", "")
+            field_desc = f.get("description", "")
+
+            prompt = f"""You are a SWIFT-to-ISO20022 migration expert.
+
+SOURCE MESSAGE TYPE: {mt_type}
+TARGET ISO 20022 SCHEMA: {iso_target}
+
+SOURCE FIELD TO MAP:
+Name: {field_name}
+Tag: {field_tag or "(unknown)"}
+Description: {field_desc}
+{formulas_context}
+{rag_block}
+
+Provide the correct ISO 20022 XPath target within the {iso_target} schema
+for this field, and a SHORT transformation expression if needed (e.g. trim,
+substring, date reformatting, BIC extraction). Keep the expression under
+8 words.
+
+Use standard ISO 20022 element names (e.g. GrpHdr/MsgId, Ntfctn/Ntry/Amt,
+RltdAgts/DbtrAgt/FinInstnId/BICFI, NtryDtls/TxDtls/Refs/InstrId).
+
+If you are NOT confident this field has a clean, direct equivalent in
+{iso_target} — it's SWIFT envelope/technical metadata, a derived
+classification code with no real 1:1 target, or you're genuinely unsure —
+do NOT guess. Return "target_xpath": null and "confidence": 0.0 instead.
+A field correctly left for human review is far better than a confidently
+wrong mapping.
+
+IMPORTANT: Return ONLY one compact, valid JSON object, nothing else:
+{{
+  "target_xpath": "NtryDtls/TxDtls/Refs/InstrId",
+  "expression": "trim(value)",
+  "confidence": 0.9,
+  "is_mandatory": true
+}}
+If unsure, return exactly:
+{{"target_xpath": null, "expression": null, "confidence": 0.0, "is_mandatory": false}}
+
+Return ONLY the JSON object, no markdown, no explanation, no array brackets.
+"""
+
+            try:
+                response = self.generate(prompt, max_tokens=300, temperature=0.1)
+                response = response.strip()
+                if "```json" in response:
+                    response = response.split("```json")[1].split("```")[0].strip()
+                elif "```" in response:
+                    response = response.split("```")[1].split("```")[0].strip()
+
+                item = json.loads(response)
+                item["source_field_name"] = field_name
+                all_elements.append(item)
+
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse JSON for field '{field_name}': {e}")
+                logger.error(f"Response was: {response[:300]}")
+                continue
+            except Exception as e:
+                logger.error(f"LLM call failed for field '{field_name}': {e}")
+                continue
+
+        return {"elements": all_elements}
+
     def validate_transformation_result(
         self,
         expected_data: List[Dict[str, Any]],
@@ -232,13 +304,6 @@ Return ONLY the JSON, no markdown, no explanation.
     ) -> Dict[str, Any]:
         """
         Valide le résultat d'une transformation en comparant avec les données attendues
-        
-        Args:
-            expected_data: Données attendues
-            actual_data: Données obtenues après transformation
-            
-        Returns:
-            Rapport de validation avec métriques et recommandations
         """
         prompt = f"""You are a data validation expert.
 
@@ -268,16 +333,15 @@ Return ONLY valid JSON:
 
 Return ONLY the JSON, no markdown, no explanation.
 """
-        
+
         response = self.generate(prompt, max_tokens=1500, temperature=0.2)
-        
-        # Extract JSON
+
         response = response.strip()
         if "```json" in response:
             response = response.split("```json")[1].split("```")[0].strip()
         elif "```" in response:
             response = response.split("```")[1].split("```")[0].strip()
-        
+
         try:
             return json.loads(response)
         except json.JSONDecodeError as e:

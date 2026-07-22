@@ -14,18 +14,59 @@ class AILearningService:
     """
     Service pour les suggestions IA avec apprentissage automatique
     """
-    
+
+    # ISO 20022 root elements, mirrors transform_mapping.py's ISO_ROOT_ELEMENTS.
+    # Kept as a local copy (not imported) to avoid a circular import between
+    # ai_learning_service and the routes module.
+    _ISO_ROOT_ELEMENTS = {
+        "pacs.008.001.08": "FIToFICstmrCdtTrf",
+        "pacs.009.001.08": "FICdtTrf",
+        "camt.053.001.08": "BkToCstmrStmt",
+        "camt.054.001.08": "BkToCstmrDbtCdtNtfctn",
+    }
+
+    def _to_full_xpath(self, target_path: str, iso_target: Optional[str]) -> str:
+        """
+        Converts a StandardElement-style dot-notation target (e.g.
+        "GrpHdr.MsgId") into a full XPath consistent with what the RAG
+        knowledge base already returns (e.g.
+        "/Document/FIToFICstmrCdtTrf/GrpHdr/MsgId"). If target_path is
+        already a full path (starts with '/' or "Document"), or if we
+        don't know the iso_target's root element, it is returned unchanged.
+        """
+        if not target_path:
+            return target_path
+        if target_path.startswith('/') or target_path.startswith('Document'):
+            return target_path
+        root = self._ISO_ROOT_ELEMENTS.get(iso_target) if iso_target else None
+        if not root:
+            return target_path
+        return f"/Document/{root}/{target_path.replace('.', '/')}"
+
     async def suggest_field_mapping(
         self,
         field_id: str,
         field_name: str,
         sample_data: Optional[List] = None,
         message_description_id: Optional[int] = None,
-        db: Session = None
+        db: Session = None,
+        mt_type: Optional[str] = None,
+        iso_target: Optional[str] = None,
     ) -> Dict:
-        print(f"\n🔍 === SUGGEST FIELD MAPPING FOR: {field_id} ===")
-        logger.info(f"🔍 Generating suggestion for field: {field_id}")
-        
+        """
+        Args:
+            mt_type: Le type SWIFT MT (ex: "MT103") ou ISO (ex: "pacs.008.001.08")
+                     du fichier source en cours d'analyse. Utilisé pour filtrer
+                     le RAG Qdrant et éviter de mélanger les suggestions entre
+                     différents types de messages (ex: ne pas suggérer une
+                     formule MT202 pour un champ d'un fichier MT103).
+            iso_target: Le schéma ISO 20022 cible (ex: "pacs.008.001.08"). Utilisé
+                     pour convertir le target_path en notation courte issue de
+                     StandardElement (ex: "GrpHdr.MsgId") en XPath complet.
+        """
+        print(f"\n🔍 === SUGGEST FIELD MAPPING FOR: {field_id} (mt_type={mt_type}) ===")
+        logger.info(f"🔍 Generating suggestion for field: {field_id} (mt_type={mt_type})")
+
         suggestion = None
 
         # Étape 1 : Historique
@@ -70,12 +111,13 @@ class AILearningService:
             matches = matcher._find_matches(matcher_field_name, sample_data)
             if matches:
                 best_match = matches[0]
+                raw_target = best_match.get('target_path', '')
                 suggestion = {
                     "element_id": best_match['element_id'],
                     "element_name": best_match['element_name'],
                     "description": best_match['element_name'],
                     "source": best_match.get('source_path', field_id),
-                    "target": best_match.get('target_path', ''),
+                    "target": self._to_full_xpath(raw_target, iso_target),
                     "transformation": "DIRECT_COPY",
                     "criticality": "MEDIUM",
                     "confidence": best_match['confidence'] / 100.0,
@@ -106,20 +148,54 @@ class AILearningService:
                 else:
                     qdrant_field_name = f"SWIFT MT {field_id} field"
 
-            rag_enrichment = self._enrich_from_qdrant(field_id, qdrant_field_name)
+            rag_enrichment = self._enrich_from_qdrant(field_id, qdrant_field_name, mt_type=mt_type, iso_target=iso_target)
             if rag_enrichment:
-                if suggestion.get('mapping_formula'):
-                    rag_enrichment.pop('mapping_formula', None)
                 suggestion.update(rag_enrichment)
-                if not suggestion.get('target') and rag_enrichment.get('rag_target_path'):
+                # An exact RAG match (this field's own dataset-authored
+                # formula) is always more trustworthy than Step 2's fuzzy
+                # ElementMatcher guess against the generic standard_elements
+                # table — it should win outright, not just fill a gap.
+                # Previously this only applied when suggestion.target was
+                # still empty, so any field ElementMatcher also produced a
+                # (wrong) guess for kept displaying — and, worse, saving on
+                # Accept — that wrong target while showing the CORRECT
+                # formula pseudocode right below it, an inconsistent pair.
+                if rag_enrichment.get('rag_target_path'):
                     suggestion['target'] = rag_enrichment['rag_target_path']
                     suggestion['target_path'] = rag_enrichment['rag_target_path']
-                if (not suggestion.get('element_id') or suggestion.get('element_id') == field_id) and rag_enrichment.get('rag_element_id'):
+                if rag_enrichment.get('rag_element_id'):
                     suggestion['element_id'] = rag_enrichment['rag_element_id']
                     suggestion['element_name'] = rag_enrichment['rag_element_id']
+                # suggestion.update() above copies rag_similarity_score in
+                # under ITS OWN key, but the confidence badge the frontend
+                # actually renders (SuggestionCard.jsx) reads
+                # suggestion['confidence'] — which is a different key, left
+                # over from Step 2's fuzzy ElementMatcher guess (often as
+                # low as 0.3). Without this, a field with an exact
+                # dataset-authored formula (shown right below as "100%
+                # match") displayed a contradictory 30% badge above it.
+                if rag_enrichment.get('rag_similarity_score') is not None:
+                    suggestion['confidence'] = rag_enrichment['rag_similarity_score']
                 print(f"  ✨ Enriched with RAG (mapping: {rag_enrichment.get('rag_mapping_id')})")
         except Exception as e:
             logger.warning(f"RAG enrichment failed for {field_id}: {e}")
+
+        # Étape 4.5 : LLM Fallback — only reached when nothing above found a
+        # trustworthy answer (no history, no exact RAG/dataset match): this
+        # is what turns a genuinely NEW field (one this platform has never
+        # seen before) into a real suggestion instead of a placeholder.
+        # Previously suggest_xml_mapping() existed but was never called
+        # from anywhere, so an unmapped field just kept ElementMatcher's
+        # weak fuzzy guess (or the flat 0.3 default) with target "N/A".
+        if suggestion.get('suggestion_source') in ('element_matcher', 'default') \
+                and (suggestion.get('confidence') or 0) < 0.6 and mt_type and iso_target:
+            try:
+                llm_result = self._suggest_via_llm(field_id, field_name, mt_type, iso_target, db)
+                if llm_result:
+                    suggestion.update(llm_result)
+                    print(f"  🤖 LLM-generated suggestion for {field_id} → {llm_result.get('target')}")
+            except Exception as e:
+                logger.warning(f"LLM fallback failed for {field_id}: {e}")
 
         # Étape 5 : Web Search
         rag_score = suggestion.get('rag_similarity_score', 0.0) or 0.0
@@ -150,6 +226,114 @@ class AILearningService:
 
         return suggestion
 
+    def _suggest_via_llm(
+        self,
+        field_id: str,
+        field_name: Optional[str],
+        mt_type: str,
+        iso_target: str,
+        db: Optional[Session],
+    ) -> Optional[Dict]:
+        """
+        Genuinely generates a mapping for a field with no exact RAG match —
+        as opposed to every other path in this file, which only ever
+        RETRIEVES a pre-authored answer. Grounds the LLM with whatever
+        formulas have already been accepted for this same mt_type (the
+        closest available context short of a real semantic search over
+        Qdrant), so it isn't reasoning from field name alone.
+        """
+        from app.services.llm_service import LLMService
+        from app.models.mapping_formula import MappingFormula
+        from app.models.message_description import MessageDescription
+
+        llm_service = LLMService()
+        formulas_context = None
+        if db:
+            md_ids = [
+                md.id for md in db.query(MessageDescription.id)
+                .filter(MessageDescription.mt_type == mt_type).all()
+            ]
+            if md_ids:
+                rows = db.query(MappingFormula).filter(
+                    MappingFormula.message_description_id.in_(md_ids),
+                    MappingFormula.target_path.isnot(None),
+                    MappingFormula.target_path != ''
+                ).limit(10).all()
+                if rows:
+                    formulas_context = [
+                        {
+                            "source_path": r.source_path,
+                            "target_path": r.target_path,
+                            "transformation_type": r.transformation_type,
+                            "transformation_rule": r.transformation_rule,
+                        }
+                        for r in rows
+                    ]
+
+        # Semantic grounding: find the closest EXISTING formulas (by vector
+        # similarity on the field's own name, not an exact tag match — this
+        # only runs when the exact lookup already found nothing) so the LLM
+        # reasons from real worked examples instead of the field name alone.
+        # This is what a hallucination like :26T: -> GrpHdr/MsgId had none
+        # of — no similar field to anchor its answer against.
+        from app.services.exact_rag_lookup import semantic_similar_formulas
+        rag_context = semantic_similar_formulas(field_name or field_id, mt_type, iso_target, n_results=3)
+
+        field_tag = field_id if field_id.startswith(':') else None
+        result = llm_service.suggest_xml_mapping(
+            mt_type=mt_type,
+            iso_target=iso_target,
+            source_fields=[{
+                "name": field_name or field_id,
+                "tag": field_tag,
+                "description": field_name or field_id,
+            }],
+            formulas=formulas_context,
+            rag_context=rag_context or None,
+        )
+        elements = result.get("elements") or []
+        if not elements:
+            return None
+
+        item = elements[0]
+        target_xpath = (item.get("target_xpath") or "").strip()
+        if not target_xpath:
+            return None
+
+        # The prompt asks for a bare relative path ("GrpHdr/MsgId"), but an
+        # LLM won't always follow that literally — it may prepend a
+        # leading slash, "Document/", or even the schema name itself
+        # (observed: "pacs.008.001.08/GrpHdr/MsgId"). Strip whatever
+        # prefix it added rather than assuming one fixed shape, or a
+        # naive f"/Document/{root}/{target_xpath}" produces a malformed
+        # doubled-up path.
+        target_xpath = target_xpath.lstrip('/')
+        if target_xpath.startswith('Document/'):
+            target_xpath = target_xpath[len('Document/'):]
+        if iso_target and target_xpath.startswith(iso_target + '/'):
+            target_xpath = target_xpath[len(iso_target) + 1:]
+
+        root = self._ISO_ROOT_ELEMENTS.get(iso_target)
+        if root and (target_xpath == root or target_xpath.startswith(root + '/')):
+            full_target = f"/Document/{target_xpath}"
+        elif root:
+            full_target = f"/Document/{root}/{target_xpath}"
+        else:
+            full_target = f"/Document/{target_xpath}"
+
+        confidence = item.get("confidence", 0.5)
+        if confidence > 1:
+            confidence = confidence / 100.0
+
+        return {
+            "target": full_target,
+            "target_path": full_target,
+            "mapping_formula": item.get("expression"),
+            "confidence": confidence,
+            "suggestion_source": "ai",
+            "criticality": "MEDIUM" if item.get("is_mandatory") else "LOW",
+        }
+
     async def _search_web(self, field_id: str, field_name: str) -> Optional[List[Dict]]:
         try:
             from ddgs import DDGS
@@ -169,108 +353,80 @@ class AILearningService:
             logger.warning(f"DuckDuckGo search failed: {e}")
             return None
 
-    def _enrich_from_qdrant(self, field_id: str, field_name: str) -> Optional[Dict]:
-        """Recherche dans Qdrant les champs enrichis pour un field donné."""
+    def _enrich_from_qdrant(
+        self,
+        field_id: str,
+        field_name: str,
+        mt_type: Optional[str] = None,
+        iso_target: Optional[str] = None,
+    ) -> Optional[Dict]:
+        """
+        Recherche dans Qdrant les champs enrichis pour un field donné.
+
+        Délègue au module partagé exact_rag_lookup (lookup_mt_to_iso), qui
+        est la SEULE implémentation de cette recherche exacte filtrée par
+        mt_type dans tout le projet. Avant cette consolidation, cette
+        logique était dupliquée ici ET dans mappings.py (find_target_for_tag
+        / find_xpath_for_mt_tag), chacune ayant accumulé sa propre version
+        du même bug (recherche sémantique non filtrée, contamination
+        croisée entre types de messages). Désormais, corriger
+        exact_rag_lookup.py corrige TOUS les appelants en même temps.
+        """
         try:
-            from app.services.rag_service import rag_service
-            if not rag_service._is_available():
-                return None
-
-            # ── Step 1: Direct lookup by field_tag in Qdrant ─────────────────
-            src_target_path = None
-            src_element_id = None
-            src_mapping_id = None
-            try:
-                from qdrant_client.models import Filter, FieldCondition, MatchValue
-                from app.services.qdrant_manager import qdrant_manager as _qm
-                clean_tag = str(field_id).strip()
-                tag_variants = [
-                    clean_tag,
-                    f":{clean_tag.strip(':')}:",
-                    f":{clean_tag.strip(':')}"
-                ]
-                for tv in tag_variants:
-                    _r = _qm.client.scroll(
-                        collection_name=_qm.collection_name,
-                        scroll_filter=Filter(must=[
-                            FieldCondition(key='chunk_type', match=MatchValue(value='SOURCE_FIELD')),
-                            FieldCondition(key='field_tag', match=MatchValue(value=tv))
-                        ]),
-                        limit=3,
-                        with_payload=True
-                    )
-                    for _p in _r[0]:
-                        if _p.payload.get('target_path'):
-                            src_target_path = _p.payload['target_path']
-                            src_element_id = _p.payload.get('element_id')
-                            src_mapping_id = _p.payload.get('mapping_id')
-                            break
-                    if src_target_path:
-                        break
-                if src_target_path:
-                    print(f"  🎯 Direct lookup: {field_id} → {src_target_path}")
-            except Exception as _e:
-                logger.warning(f"Direct field_tag lookup failed: {_e}")
-
-            # ── Step 2: Semantic search for compliance/audit enrichment ───────
-            query = f"field mapping {field_name or field_id} transformation rules compliance audit"
-            results = rag_service.query(
-                query=query,
-                n_results=5,
-                filter_metadata={"chunk_type": "FIELD_MAPPING"}
-            )
-
+            from app.services.exact_rag_lookup import lookup_mt_to_iso_all, lookup_iso_to_mt_all
+            # field_id shape tells us the direction: a dotted, colon-free
+            # string ("CdtTrfTxInf.Dbtr.Nm") is an XML path from an
+            # XML->MT upload; a SWIFT tag ("...", starts with ':') is the
+            # MT->ISO direction this always assumed before. Without this,
+            # every XML-sourced field silently searched Qdrant as if it
+            # were an MT tag and never found anything.
+            is_xml_path = bool(field_id) and not field_id.startswith(':') and '.' in field_id
+            if is_xml_path:
+                results = lookup_iso_to_mt_all(field_id, mt_type, iso_target)
+            else:
+                results = lookup_mt_to_iso_all(field_id, mt_type, iso_target)
             if not results:
-                if src_target_path:
-                    return {
-                        "rag_target_path": src_target_path,
-                        "rag_element_id": src_element_id,
-                        "rag_mapping_id": src_mapping_id,
-                        "rag_similarity_score": 0.7,
-                    }
                 return None
+            result = results[0]
 
-            metadatas = results.get('metadatas', [[]])[0]
-            documents = results.get('documents', [[]])[0]
-            distances = results.get('distances', [[]])[0]
-
-            if not metadatas:
-                return None
-
-            best_meta = metadatas[0]
-            best_doc = documents[0] if documents else ""
-            best_score = distances[0] if distances else 0.0
-
-            if best_score < 0.3:
-                return None
-
-            mapping_formula_obj = best_meta.get('mapping_formula', {})
-            formula_details = mapping_formula_obj.get('details', {}) if isinstance(mapping_formula_obj, dict) else {}
-            global_vars_dict = formula_details.get('global_variables', {})
+            print(f"  🎯 Exact lookup: {field_id} → {result.get('target_path')}"
+                  + (f" (+{len(results) - 1} more target(s))" if len(results) > 1 else ""))
 
             enrichment = {
-                "rag_mapping_id": best_meta.get('mapping_id'),
-                "rag_mapping_name": best_meta.get('mapping_name'),
-                "rag_similarity_score": round(best_score, 3),
-                "performance_impact": best_meta.get('performance_impact'),
-                "has_audit_requirement": best_meta.get('has_audit_requirement', False),
-                "has_compliance_requirement": best_meta.get('has_compliance_requirement', False),
-                "has_migration_note": best_meta.get('has_migration_note', False),
-                "mapping_formula": mapping_formula_obj.get('pseudocode') if isinstance(mapping_formula_obj, dict) else None,
-                "global_variable_refs": list(global_vars_dict.keys()) if global_vars_dict else [],
-                "rag_target_path": src_target_path or best_meta.get('target_path'),
-                "rag_element_id": src_element_id or best_meta.get('element_id'),
-                "rag_src_mapping_id": src_mapping_id,
+                "rag_mapping_id": result.get('mapping_id'),
+                "rag_mapping_name": result.get('mapping_name'),
+                "rag_similarity_score": 1.0 if result.get('mapping_name') else 0.7,
+                "performance_impact": result.get('performance_impact'),
+                "has_audit_requirement": result.get('has_audit_requirement', False),
+                "has_compliance_requirement": result.get('has_compliance_requirement', False),
+                "has_migration_note": result.get('has_migration_note', False),
+                "mapping_formula": result.get('formula_pseudocode'),
+                "global_variable_refs": result.get('global_variable_refs', []),
+                "rag_target_path": result.get('target_path'),
+                "rag_element_id": result.get('element_id'),
+                "rag_src_mapping_id": result.get('mapping_id'),
+                "audit_requirement": result.get('audit_requirement'),
+                "compliance_requirement": result.get('compliance_requirement'),
+                "data_privacy": result.get('data_privacy'),
+                "migration_note": result.get('migration_note'),
+                "caching_strategy": result.get('caching_strategy'),
+                # A single source field can drive several ISO 20022 targets
+                # from one shared multi-statement formula (e.g. :50K: ->
+                # Dbtr.Nm AND DbtrAcct.Id.IBAN, via a <TargetFields>
+                # wrapper). lookup_mt_to_iso_all returns every one of them;
+                # the first becomes the primary suggestion above, the rest
+                # are carried here so the accept flow can create a
+                # MappingFormula for each instead of silently dropping them.
+                "additional_targets": [
+                    {
+                        "target_path": r.get('target_path'),
+                        "element_id": r.get('element_id'),
+                    }
+                    for r in results[1:] if r.get('target_path')
+                ],
             }
-
-            enrichment["audit_requirement"] = best_meta.get('audit_requirement') or self._extract_section(best_doc, "Audit Requirement:")
-            enrichment["compliance_requirement"] = best_meta.get('compliance_requirement') or self._extract_section(best_doc, "Compliance Requirement:")
-            enrichment["data_privacy"] = best_meta.get('data_privacy') or self._extract_section(best_doc, "Data Privacy (GDPR):")
-            enrichment["migration_note"] = best_meta.get('migration_note') or self._extract_section(best_doc, "Migration Note:")
-            enrichment["caching_strategy"] = best_meta.get('caching_strategy') or self._extract_section(best_doc, "Caching Strategy:")
-
             enrichment = {k: v for k, v in enrichment.items() if v is not None and v != [] and v != {}}
-            return enrichment if len(enrichment) > 2 else None
+            return enrichment if len(enrichment) > 1 else None
 
         except Exception as e:
             logger.warning(f"_enrich_from_qdrant failed: {e}")

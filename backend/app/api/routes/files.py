@@ -14,19 +14,19 @@ from app.services.file_processor import FileProcessor
 from app.services.llm_service import LLMService
 from app.models.message_description import MessageDescription
 from app.models.file_upload import FileUpload, FileUploadStatus
+from app.models.notification import Notification
 from app.schemas.message_description import MessageDescriptionResponse
 from app.services.element_matcher import ElementMatcher
 from app.services import ai_learning_service
+from app.services.audit_service import log_action
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Initialize services
 file_processor = FileProcessor()
 llm_service = LLMService()
 hierarchy_parser = HierarchyParser()
 
-# Ensure upload directory exists
 UPLOAD_DIR = Path(settings.UPLOAD_DIR)
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -98,13 +98,8 @@ async def analyze_file(
         with open(file_path, "wb") as f:
             f.write(content)
 
-        # TXT SWIFT → traiter comme XML_MT
-        if file_extension == 'txt':
-            file_extension = 'xml'
-
         logger.info(f"Analyzing file with AI Learning: {unique_filename}")
 
-        # Créer FileUpload en base
         file_upload = FileUpload(
             user_id=current_user.id,
             original_filename=file.filename,
@@ -118,14 +113,20 @@ async def analyze_file(
         db.refresh(file_upload)
         logger.info(f"FileUpload created: ID {file_upload.id}")
 
-        # Process file to extract structure
         file_info = file_processor.process_file(str(file_path))
 
         columns = file_info['columns']
         sample_data = file_info['sample_data']
         file_type = file_info['file_type']
 
-        # Extraire mt_info si XML_MT
+        # ── FIX: normalize columns to a flat list of strings ──────────────────
+        column_display_names = {}
+        if columns and isinstance(columns[0], dict):
+            for c in columns:
+                col_name = c.get('name', str(c))
+                column_display_names[col_name] = c.get('display_name', col_name)
+            columns = [c.get('name', str(c)) for c in columns]
+
         mt_info = file_info.get('mt_info')
         mt_type = mt_info.get('mt_type') if mt_info else None
         iso_target = mt_info.get('iso_target') if mt_info else None
@@ -133,7 +134,6 @@ async def analyze_file(
         if mt_type:
             logger.info(f"MT detected: {mt_type} → {iso_target}, {len(mt_blocks)} blocks")
 
-        # Détecter la structure hiérarchique
         hierarchical_structure = None
         hierarchy_paths = []
 
@@ -180,7 +180,6 @@ async def analyze_file(
                 "total_paths": len(columns)
             }
 
-        # Analyze with LLM — catch errors gracefully
         logger.info("Sending file structure to LLM for analysis...")
         try:
             analysis = llm_service.analyze_file_structure(
@@ -202,7 +201,6 @@ async def analyze_file(
                     col_analysis['path'] = col_name
                     col_analysis['level'] = len(col_name.split('.'))
 
-        # Sauvegarder dans la base
         message_desc = MessageDescription(
             user_id=current_user.id,
             file_name=file.filename,
@@ -222,25 +220,71 @@ async def analyze_file(
         db.refresh(message_desc)
         logger.info(f"MessageDescription created: ID {message_desc.id}")
 
-        # Marquer FileUpload comme COMPLETED
+        log_action(
+            db, current_user, action="propose", entity_type="MessageDescription",
+            entity_id=message_desc.id,
+            details=f"Uploaded \"{message_desc.file_name}\" ({mt_type or file_type})"
+        )
+
+        admins = db.query(User).filter(User.is_admin.is_(True), User.id != current_user.id).all()
+        for admin in admins:
+            db.add(Notification(
+                user_id=admin.id,
+                message=f"{current_user.username} proposed a new Message Description: \"{message_desc.file_name}\"",
+                link="/message-descriptions"
+            ))
+
+        db.commit()
+
         file_upload.status = FileUploadStatus.COMPLETED
         db.commit()
 
-        # Générer suggestions avec AI Learning + Enrichissement Qdrant
         from app.services.ai_learning_service import ai_learning_service
 
+        # field_id_for_rag maps the raw column name (e.g. "block4.:20", as
+        # produced by swift_txt_parser for .txt uploads) to the clean SWIFT
+        # tag needed for RAG lookup (e.g. ":20:"). Without this, field_id
+        # passed to suggest_field_mapping never starts with ':', so every
+        # MT-tag-aware branch in that function (ElementMatcher naming, RAG
+        # exact lookup via exact_rag_lookup) is silently skipped and every
+        # business field falls through to a generic, wrong ElementMatcher
+        # guess. Mirrors the same mapping already used by /regenerate-mt.
+        field_id_for_rag = {}
+        for column in columns:
+            parts = column.split('.', 1)
+            if parts[0] == 'block4' and len(parts) == 2 and parts[1].startswith(':'):
+                field_id_for_rag[column] = f":{parts[1].strip(':')}:"
+
+        # NOTE: header/technical fields (block1/2/3/5) are SWIFT envelope
+        # fields with no real ISO 20022 business mapping — skip the RAG/LLM
+        # pipeline entirely for them instead of letting a weak semantic match
+        # produce a misleadingly confident (and wrong) suggestion.
         suggestions = {}
         try:
             logger.info(f"Generating AI Learning suggestions for {len(columns)} columns")
 
             for column in columns:
-                suggestion = await ai_learning_service.suggest_field_mapping(
-                    field_id=column,
-                    field_name=column,
-                    sample_data=sample_data[:5],
-                    message_description_id=message_desc.id,
-                    db=db
-                )
+                is_header_field = column.startswith('block') and not column.split('.')[0] == 'block4'
+
+                if is_header_field:
+                    suggestion = {
+                        "element_id": column,
+                        "element_name": column,
+                        "target": "",
+                        "confidence": 0.0,
+                        "suggestion_source": "not_applicable",
+                        "reason": "Technical SWIFT envelope field — no ISO 20022 business mapping",
+                    }
+                else:
+                    suggestion = await ai_learning_service.suggest_field_mapping(
+                        field_id=field_id_for_rag.get(column, column),
+                        field_name=column_display_names.get(column, column),
+                        sample_data=sample_data[:5],
+                        message_description_id=message_desc.id,
+                        db=db,
+                        mt_type=mt_type,
+                        iso_target=iso_target
+                    )
 
                 suggestions[column] = [{
                     "element_id": suggestion.get('element_id', column),
@@ -277,7 +321,6 @@ async def analyze_file(
             traceback.print_exc()
             suggestions = {}
 
-        # Réponse complète
         return {
             "id": message_desc.id,
             "user_id": message_desc.user_id,
@@ -318,9 +361,28 @@ async def list_files(
 ):
     """Liste tous les fichiers uploadés par l'utilisateur"""
     try:
+        from app.models import MessageDescriptionElement
+        from sqlalchemy import func
+
         message_descs = db.query(MessageDescription).filter(
             MessageDescription.user_id == current_user.id
         ).order_by(MessageDescription.created_at.desc()).all()
+
+        # element_count lets callers (e.g. the Validate page's reference-
+        # standard dropdown) tell a fully "Generate MD"-processed upload
+        # apart from a bare, just-uploaded one with no elements yet — the
+        # same distinction generate_mapping_elements already uses via
+        # get_block4_elements. Without it, "pick the newest upload of this
+        # type" (whether here or client-side) can silently select a
+        # duplicate re-upload that was never processed, producing zero
+        # validation rules with no visible error until validation itself
+        # inexplicably finds nothing.
+        counts = dict(
+            db.query(
+                MessageDescriptionElement.message_description_id,
+                func.count(MessageDescriptionElement.id)
+            ).group_by(MessageDescriptionElement.message_description_id).all()
+        )
 
         return {
             "files": [
@@ -334,7 +396,9 @@ async def list_files(
                     "mapping_completion": md.mapping_completion,
                     "quality_score": md.quality_score,
                     "mt_type": md.mt_type,
-                    "iso_target": md.iso_target
+                    "iso_target": md.iso_target,
+                    "element_count": counts.get(md.id, 0),
+                    "approved": md.approved
                 }
                 for md in message_descs
             ],
@@ -536,26 +600,53 @@ async def regenerate_mt_suggestions(
 
         columns = []
         sample_row = {}
+        # field_id_for_rag maps the display column name (e.g. "block4.:20")
+        # to the clean SWIFT tag to use for RAG lookup (e.g. ":20:"). Header
+        # blocks (block1/2/3/5) get no RAG tag at all — they're skipped below.
+        field_id_for_rag = {}
         for tag, block in message_desc.mt_blocks.items():
+            is_business_block = (tag == 'block4')
             if block.get('type') == 'string':
                 columns.append(tag)
                 sample_row[tag] = block.get('value')
+                field_id_for_rag[tag] = None
             elif block.get('type') == 'map':
                 for sub_name, sub_field in block.get('sub_fields', {}).items():
                     col = f"{tag}.{sub_name}"
                     columns.append(col)
                     sample_row[col] = sub_field.get('value')
+                    if is_business_block and sub_name.startswith(':'):
+                        clean = sub_name.strip(':')
+                        field_id_for_rag[col] = f":{clean}:"
+                    else:
+                        field_id_for_rag[col] = None
 
         from app.services.ai_learning_service import ai_learning_service
         suggestions = {}
         for column in columns:
-            suggestion = await ai_learning_service.suggest_field_mapping(
-                field_id=column,
-                field_name=column,
-                sample_data=[sample_row],
-                message_description_id=message_desc.id,
-                db=db
-            )
+            rag_tag = field_id_for_rag.get(column)
+            is_header_field = column.split('.')[0] != 'block4'
+
+            if is_header_field:
+                suggestion = {
+                    "element_id": column,
+                    "element_name": column,
+                    "target": "",
+                    "confidence": 0.0,
+                    "suggestion_source": "not_applicable",
+                    "reason": "Technical SWIFT envelope field — no ISO 20022 business mapping",
+                }
+            else:
+                suggestion = await ai_learning_service.suggest_field_mapping(
+                    field_id=rag_tag or column,
+                    field_name=column,
+                    sample_data=[sample_row],
+                    message_description_id=message_desc.id,
+                    db=db,
+                    mt_type=message_desc.mt_type,
+                    iso_target=message_desc.iso_target
+                )
+
             suggestions[column] = [{
                 "element_id": suggestion.get('element_id', column),
                 "element_name": suggestion.get('element_name', column),

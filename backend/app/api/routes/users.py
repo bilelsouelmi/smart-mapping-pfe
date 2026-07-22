@@ -15,12 +15,24 @@ def get_users(
     skip: int = 0,
     limit: int = 100,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_admin)  # Only admins
+    current_user: User = Depends(get_current_active_admin)
 ):
     """
-    Récupère tous les utilisateurs (admin uniquement)
+    Récupère tous les utilisateurs (admin uniquement).
     """
     users = db.query(User).offset(skip).limit(limit).all()
+    return users
+
+
+@router.get("/pending", response_model=List[UserResponse])
+def get_pending_users(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_admin)
+):
+    """
+    Récupère les utilisateurs en attente d'approbation (admin uniquement).
+    """
+    users = db.query(User).filter(User.is_active == False).all()
     return users
 
 
@@ -31,26 +43,25 @@ def get_user(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Récupère un utilisateur par ID
-    
-    Note: Les utilisateurs peuvent voir leur propre profil,
-    les admins peuvent voir tous les profils
+    Récupère un utilisateur par ID.
+    Les utilisateurs peuvent voir leur propre profil,
+    les admins peuvent voir tous les profils.
     """
     user = db.query(User).filter(User.id == user_id).first()
-    
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"User {user_id} not found"
         )
-    
+
     # Check permissions
     if user.id != current_user.id and not current_user.is_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not enough permissions"
         )
-    
+
     return user
 
 
@@ -62,67 +73,124 @@ def update_user(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Met à jour un utilisateur
-    
-    Note: Les utilisateurs peuvent modifier leur propre profil,
-    les admins peuvent modifier tous les profils
+    Met à jour un utilisateur.
+    Les utilisateurs peuvent modifier leur propre profil,
+    les admins peuvent modifier tous les profils.
     """
     user = db.query(User).filter(User.id == user_id).first()
-    
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"User {user_id} not found"
         )
-    
+
     # Check permissions
     if user.id != current_user.id and not current_user.is_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not enough permissions"
         )
-    
+
     # Update fields
     update_data = user_update.model_dump(exclude_unset=True)
-    
+
     # Hash password if provided
     if "password" in update_data and update_data["password"]:
         update_data["hashed_password"] = get_password_hash(update_data.pop("password"))
-    
+
     for field, value in update_data.items():
         setattr(user, field, value)
-    
+
     db.commit()
     db.refresh(user)
-    
+
     return user
+
+
+@router.post("/{user_id}/approve", response_model=UserResponse)
+def approve_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_admin)
+):
+    """
+    Approuve un compte utilisateur en attente (admin uniquement).
+    Active le compte en mettant is_active=True.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User {user_id} not found"
+        )
+
+    if user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User is already active"
+        )
+
+    user.is_active = True
+    db.commit()
+    db.refresh(user)
+
+    return user
+
+
+@router.post("/{user_id}/reject", status_code=status.HTTP_204_NO_CONTENT)
+def reject_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_admin)
+):
+    """
+    Rejette et supprime un compte utilisateur en attente (admin uniquement).
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User {user_id} not found"
+        )
+
+    if user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot reject an already active user"
+        )
+
+    db.delete(user)
+    db.commit()
+    return None
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_user(
     user_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_admin)  # Only admins
+    current_user: User = Depends(get_current_active_admin)
 ):
     """
-    Supprime un utilisateur (admin uniquement)
+    Supprime un utilisateur (admin uniquement).
     """
     user = db.query(User).filter(User.id == user_id).first()
-    
+
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"User {user_id} not found"
         )
-    
+
     # Prevent self-deletion
     if user.id == current_user.id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot delete your own account"
         )
-    
+
     db.delete(user)
     db.commit()
-    
     return None

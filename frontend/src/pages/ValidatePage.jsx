@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Upload, CheckCircle, XCircle, AlertTriangle, FileText, Shield, ChevronDown, ChevronRight } from 'lucide-react';
+import { Upload, CheckCircle, XCircle, AlertTriangle, FileText, Shield, ChevronDown, ChevronRight, Database } from 'lucide-react';
 import Layout from '../components/Layout';
+import WorkflowSteps from '../components/WorkflowSteps';
 
 const API = 'http://localhost:8000/api';
 
@@ -13,12 +14,75 @@ const ValidatePage = () => {
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef(null);
 
-  // Restore from sessionStorage
+  // MD reference selector
+  const [mdList, setMdList] = useState([]);
+  const [selectedMdId, setSelectedMdId] = useState('');
+  const [loadingMds, setLoadingMds] = useState(false);
+
+  useEffect(() => {
+    const fetchMds = async () => {
+      setLoadingMds(true);
+      try {
+        const res = await axios.get(`${API}/files/`);
+        const files = res.data.files || [];
+        // Deduplicate by (mt_type, file_type) — keep latest (highest id) per
+        // combination. mt_type alone isn't enough: an ISO 20022 XML upload
+        // and a genuine SWIFT MT text upload can share the same mt_type
+        // (e.g. both "MT103" — one detected FROM the XML content, the
+        // other from the MT text itself), but they're structurally
+        // different files that need different validation rule sets. Keying
+        // on mt_type alone meant any newer upload of either kind silently
+        // evicted the other from the dropdown entirely, even though both
+        // are legitimate, independently useful reference standards.
+        const seen = {};
+        const deduped = [];
+        // Prefer entries that actually have elements (i.e. "Generate MD"
+        // was run) over the literal newest upload — the same file gets
+        // re-uploaded often enough (testing, drag-drop retries) that
+        // "highest id" alone regularly lands on a duplicate that was never
+        // processed. Picking that one as the reference means "import rules
+        // from MD" silently produces zero rules (no error at that step),
+        // and the real failure only surfaces later as a confusing "no
+        // rules found" when actually validating a file against it. Within
+        // each (has-elements, id) tier, still prefer the newest.
+        const sorted = [...files].sort((a, b) => {
+          const aHas = (a.element_count || 0) > 0;
+          const bHas = (b.element_count || 0) > 0;
+          if (aHas !== bHas) return aHas ? -1 : 1;
+          return b.id - a.id;
+        });
+        for (const md of sorted) {
+          const key = md.mt_type ? `${md.mt_type}|${md.file_type || ''}` : md.file_name;
+          if (!seen[key]) {
+            seen[key] = true;
+            deduped.push(md);
+          }
+        }
+        setMdList(deduped);
+      } catch (e) {
+        console.error('Failed to load MDs', e);
+      } finally {
+        setLoadingMds(false);
+      }
+    };
+    fetchMds();
+  }, []);
+
   useEffect(() => {
     const saved = sessionStorage.getItem('validate_page_state');
     if (saved) {
       try { setResult(JSON.parse(saved)); } catch (e) {}
     }
+  }, []);
+
+  useEffect(() => {
+    const handleReset = () => {
+      setResult(null);
+      setFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+    window.addEventListener('validate-reset', handleReset);
+    return () => window.removeEventListener('validate-reset', handleReset);
   }, []);
 
   const handleFileUpload = async (selectedFile) => {
@@ -30,6 +94,40 @@ const ValidatePage = () => {
 
   const handleValidate = async () => {
     if (!file) return;
+    if (!selectedMdId) {
+      alert('⚠️ Please select a reference standard from the dropdown before validating.');
+      return;
+    }
+
+    // Check MT type match between reference and uploaded file
+    const selectedMd = mdList.find(md => String(md.id) === String(selectedMdId));
+    if (selectedMd && selectedMd.mt_type) {
+      // Detect MT type from file name as a quick pre-check
+      const fileName = file.name.toLowerCase();
+      const refMtType = selectedMd.mt_type.toLowerCase();
+      // Extract MT number from reference (e.g. MT103 -> 103)
+      const refMtNum = refMtType.replace('mt', '');
+      // Check if filename contains the MT number of the reference
+      // Only block if filename explicitly contains a different MT number
+      const mtNumbers = ['103', '202', '900', '910', '940', '950'];
+      const fileContainsMt = mtNumbers.find(n => fileName.includes(n) || fileName.includes(`mt${n}`));
+      if (fileContainsMt && fileContainsMt !== refMtNum) {
+        alert(`⚠️ MT type mismatch!
+
+Reference standard: ${selectedMd.mt_type}
+File appears to be: MT${fileContainsMt}
+
+Please select the correct reference standard for this file.`);
+        return;
+      }
+    }
+
+    try {
+      await axios.post(`${API}/validation/validation-rules/import-from-md/${selectedMdId}`);
+    } catch (e) {
+      alert('Failed to load reference: ' + (e.response?.data?.detail || e.message));
+      return;
+    }
     setValidating(true);
     try {
       const formData = new FormData();
@@ -54,7 +152,6 @@ const ValidatePage = () => {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  // Group errors/passed by block
   const groupByBlock = (items) => {
     const groups = {};
     items.forEach(item => {
@@ -74,7 +171,8 @@ const ValidatePage = () => {
       }}>
         <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
 
-          {/* Header */}
+          <WorkflowSteps current="validate" />
+
           <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }}
             style={{ marginBottom: '2rem', textAlign: 'center' }}>
             <h1 style={{
@@ -82,14 +180,51 @@ const ValidatePage = () => {
               background: 'linear-gradient(135deg, #10b981 0%, #06b6d4 100%)',
               WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', marginBottom: '0.5rem'
             }}>
-              🛡️ SWIFT File Validation
+              🛡️ File Validation
             </h1>
             <p style={{ color: '#a0a0a0', fontSize: '1rem' }}>
-              Validate client SWIFT files against standard rules
+              Check any file against an approved reference standard — this also runs automatically before every Transform
             </p>
           </motion.div>
 
-          {/* Upload Zone */}
+          {/* Reference Standard Selector */}
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+            style={{ marginBottom: '1rem' }}>
+            <GlassCard>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <Database size={18} color="#06b6d4" />
+                <span style={{ color: '#a0a0a0', fontSize: '0.9rem', whiteSpace: 'nowrap' }}>
+                  Reference standard:
+                </span>
+                <select
+                  value={selectedMdId}
+                  onChange={e => setSelectedMdId(e.target.value)}
+                  style={{
+                    flex: 1, padding: '0.5rem 0.75rem',
+                    background: 'rgba(255,255,255,0.05)',
+                    border: '1px solid rgba(255,255,255,0.15)',
+                    borderRadius: '8px', color: 'white', fontSize: '0.9rem',
+                    cursor: 'pointer', outline: 'none'
+                  }}
+                >
+                  <option value="" style={{ background: '#1a1a2e' }}>
+                    {loadingMds ? 'Loading...' : '── Select a reference standard ──'}
+                  </option>
+                  {mdList.map(md => (
+                    <option key={md.id} value={md.id} style={{ background: '#1a1a2e' }}>
+                      {md.file_name}{md.mt_type ? ` (${md.mt_type})` : ''}{md.file_type ? ` · ${md.file_type}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {selectedMdId && (
+                <div style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: '#06b6d4', paddingLeft: '1.75rem' }}>
+                  ✓ Will validate against selected reference
+                </div>
+              )}
+            </GlassCard>
+          </motion.div>
+
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
             <GlassCard>
               <div
@@ -103,15 +238,15 @@ const ValidatePage = () => {
                   background: dragOver ? 'rgba(16,185,129,0.05)' : 'transparent', transition: 'all 0.2s'
                 }}
               >
-                <input ref={fileInputRef} type="file" accept=".txt,.xml"
+                <input ref={fileInputRef} type="file" accept=".txt,.xml,.csv,.json,.xlsx,.xls"
                   style={{ display: 'none' }}
                   onChange={e => handleFileUpload(e.target.files[0])} />
                 <Upload size={36} color="#10b981" style={{ margin: '0 auto 0.75rem' }} />
                 <div style={{ color: 'white', fontWeight: '600', marginBottom: '0.25rem' }}>
-                  {file ? file.name : 'Upload Client SWIFT File'}
+                  {file ? file.name : 'Upload Client File'}
                 </div>
                 <div style={{ color: '#6b7280', fontSize: '0.85rem' }}>
-                  {file ? `${(file.size / 1024).toFixed(1)} KB · Click to change` : 'Drop .txt or .xml SWIFT file'}
+                  {file ? `${(file.size / 1024).toFixed(1)} KB · Click to change` : 'Drop .txt .xml .csv .json .xlsx file'}
                 </div>
               </div>
 
@@ -138,13 +273,10 @@ const ValidatePage = () => {
             </GlassCard>
           </motion.div>
 
-          {/* Results */}
           <AnimatePresence>
             {result && (
               <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
                 style={{ marginTop: '1.5rem' }}>
-
-                {/* Summary */}
                 <GlassCard>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem' }}>
                     {result.is_valid
@@ -152,10 +284,7 @@ const ValidatePage = () => {
                       : <XCircle size={40} color="#ef4444" />
                     }
                     <div>
-                      <div style={{
-                        fontSize: '1.4rem', fontWeight: '800',
-                        color: result.is_valid ? '#10b981' : '#ef4444'
-                      }}>
+                      <div style={{ fontSize: '1.4rem', fontWeight: '800', color: result.is_valid ? '#10b981' : '#ef4444' }}>
                         {result.is_valid ? '✅ File is VALID' : '❌ File is INVALID'}
                       </div>
                       <div style={{ color: '#6b7280', fontSize: '0.9rem' }}>
@@ -170,7 +299,6 @@ const ValidatePage = () => {
                     </div>
                   </div>
 
-                  {/* Errors */}
                   {result.errors.length > 0 && (
                     <div style={{ marginBottom: '1.5rem' }}>
                       <div style={{ color: '#ef4444', fontWeight: '700', marginBottom: '0.75rem', fontSize: '0.95rem' }}>
@@ -182,7 +310,6 @@ const ValidatePage = () => {
                     </div>
                   )}
 
-                  {/* Warnings */}
                   {result.warnings.length > 0 && (
                     <div style={{ marginBottom: '1.5rem' }}>
                       <div style={{ color: '#f59e0b', fontWeight: '700', marginBottom: '0.75rem', fontSize: '0.95rem' }}>
@@ -202,7 +329,6 @@ const ValidatePage = () => {
                     </div>
                   )}
 
-                  {/* Passed */}
                   {result.passed.length > 0 && (
                     <CollapsibleSection title={`✅ Passed Fields (${result.passed.length})`} color="#10b981">
                       {Object.entries(groupByBlock(result.passed)).map(([block, items]) => (
@@ -219,54 +345,42 @@ const ValidatePage = () => {
         <style>{`
           .spinner { width: 18px; height: 18px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; display: inline-block; }
           @keyframes spin { to { transform: rotate(360deg); } }
+          select option { background: #1a1a2e; color: white; }
         `}</style>
       </div>
     </Layout>
   );
 };
 
-// ── Block Group ───────────────────────────────────────────────────────────────
 const BlockGroup = ({ block, items, type }) => {
   const [expanded, setExpanded] = useState(true);
   const isError = type === 'error';
   const color = isError ? '#ef4444' : '#10b981';
   const bg = isError ? 'rgba(239,68,68,0.05)' : 'rgba(16,185,129,0.05)';
   const border = isError ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)';
-
   return (
     <div style={{ marginBottom: '8px', background: bg, border: `1px solid ${border}`, borderRadius: '8px', overflow: 'hidden' }}>
-      <div onClick={() => setExpanded(!expanded)} style={{
-        padding: '8px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px'
-      }}>
+      <div onClick={() => setExpanded(!expanded)} style={{ padding: '8px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
         {expanded ? <ChevronDown size={14} color={color} /> : <ChevronRight size={14} color={color} />}
         <span style={{ color, fontWeight: '700', fontSize: '12px', fontFamily: 'monospace' }}>{block}</span>
         <span style={{ color: '#6b7280', fontSize: '11px' }}>{items.length} field{items.length > 1 ? 's' : ''}</span>
       </div>
       {expanded && (
         <div style={{ padding: '0 12px 8px' }}>
-          {items.map((item, i) => (
-            <FieldRow key={i} item={item} type={type} />
-          ))}
+          {items.map((item, i) => <FieldRow key={i} item={item} type={type} />)}
         </div>
       )}
     </div>
   );
 };
 
-// ── Field Row ─────────────────────────────────────────────────────────────────
 const FieldRow = ({ item, type }) => {
   const isError = type === 'error';
   return (
-    <div style={{
-      padding: '6px 8px', marginBottom: '4px',
-      background: 'rgba(0,0,0,0.2)', borderRadius: '6px',
-      fontSize: '12px'
-    }}>
+    <div style={{ padding: '6px 8px', marginBottom: '4px', background: 'rgba(0,0,0,0.2)', borderRadius: '6px', fontSize: '12px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: isError ? '4px' : 0 }}>
         {isError ? <XCircle size={12} color="#ef4444" /> : <CheckCircle size={12} color="#10b981" />}
-        <span style={{ color: '#f59e0b', fontFamily: 'monospace', fontWeight: '700' }}>
-          {item.field || item.field_name}
-        </span>
+        <span style={{ color: '#f59e0b', fontFamily: 'monospace', fontWeight: '700' }}>{item.field || item.field_name}</span>
         <span style={{ color: '#6b7280' }}>{item.field_name}</span>
         {item.value && (
           <span style={{ marginLeft: 'auto', color: '#a5f3fc', fontFamily: 'monospace', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -275,15 +389,12 @@ const FieldRow = ({ item, type }) => {
         )}
       </div>
       {isError && item.errors && item.errors.map((err, i) => (
-        <div key={i} style={{ color: '#fca5a5', paddingLeft: '20px', fontSize: '11px' }}>
-          → {err}
-        </div>
+        <div key={i} style={{ color: '#fca5a5', paddingLeft: '20px', fontSize: '11px' }}>→ {err}</div>
       ))}
     </div>
   );
 };
 
-// ── Collapsible Section ───────────────────────────────────────────────────────
 const CollapsibleSection = ({ title, color, children }) => {
   const [expanded, setExpanded] = useState(false);
   return (
@@ -300,7 +411,6 @@ const CollapsibleSection = ({ title, color, children }) => {
   );
 };
 
-// ── Stat Badge ────────────────────────────────────────────────────────────────
 const StatBadge = ({ label, value, color }) => (
   <div style={{ textAlign: 'center' }}>
     <div style={{ fontSize: '1.5rem', fontWeight: '800', color }}>{value}</div>
@@ -308,7 +418,6 @@ const StatBadge = ({ label, value, color }) => (
   </div>
 );
 
-// ── Glass Card ────────────────────────────────────────────────────────────────
 const GlassCard = ({ children }) => (
   <div style={{
     background: 'rgba(255,255,255,0.05)', backdropFilter: 'blur(10px)',
@@ -320,4 +429,4 @@ const GlassCard = ({ children }) => (
   </div>
 );
 
-export default ValidatePage;    
+export default ValidatePage;

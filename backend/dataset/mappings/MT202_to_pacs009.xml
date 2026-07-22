@@ -7,10 +7,10 @@
   <GeneralInformation>
     <MappingId>MAP_MT202_PACS009_001</MappingId>
     <MappingName>MT202 to pacs.009 Conversion</MappingName>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <CreatedDate>2026-04-27</CreatedDate>
     <CreatedBy>Bilel SOUELMI - Vermeg FinTech Team</CreatedBy>
-    <LastModifiedDate>2026-04-27</LastModifiedDate>
+    <LastModifiedDate>2026-07-15</LastModifiedDate>
     <Status>ACTIVE</Status>
 
     <BusinessContext>
@@ -135,6 +135,27 @@
         <ExampleValue>/BNF/Cover payment for MT103 TRF20260427001</ExampleValue>
       </Field>
 
+      <!-- ADDED: :53A:/:54A: dataset enrichment — correspondent banking
+           chain fields, mirroring the same additions already made to
+           MT103_to_pacs008.xml. -->
+      <Field id="FIELD_09">
+        <FieldTag>:53A:</FieldTag>
+        <FieldName>Sender's Correspondent</FieldName>
+        <DataType>BIC</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Correspondent bank of the sender, used when the sender has no direct account relationship with the receiver</Description>
+        <ExampleValue>CORRUSXXX</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_10">
+        <FieldTag>:54A:</FieldTag>
+        <FieldName>Receiver's Correspondent</FieldName>
+        <DataType>BIC</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Correspondent bank of the receiver, used when the receiver has no direct account relationship with the sender</Description>
+        <ExampleValue>INTLDEFFXXX</ExampleValue>
+      </Field>
+
     </Fields>
   </SourceMessage>
 
@@ -254,25 +275,74 @@
         <ExampleValue>/BNF/Cover payment for MT103 TRF20260427001</ExampleValue>
       </Field>
 
+      <Field id="TARGET_12">
+        <XPath>/Document/FICdtTrf/CdtTrfTxInf/IntrBkSttlmDt</XPath>
+        <FieldName>Interbank Settlement Date</FieldName>
+        <DataType>DATE</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Settlement date from MT202 field 32A's date component</Description>
+        <ExampleValue>2026-04-27</ExampleValue>
+      </Field>
+
+      <Field id="TARGET_13">
+        <XPath>/Document/FICdtTrf/CdtTrfTxInf/PrvsInstgAgt1/FinInstnId/BICFI</XPath>
+        <FieldName>Previous Instructing Agent 1 - BIC</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>11</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>Sender's correspondent bank (MT202 field 53A)</Description>
+        <ExampleValue>CORRUSXXX</ExampleValue>
+      </Field>
+
+      <Field id="TARGET_14">
+        <XPath>/Document/FICdtTrf/CdtTrfTxInf/InstdAgt/FinInstnId/BICFI</XPath>
+        <FieldName>Instructed Agent - BIC</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>11</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Description>Receiver's correspondent bank (MT202 field 54A)</Description>
+        <ExampleValue>INTLDEFFXXX</ExampleValue>
+      </Field>
+
     </Fields>
   </TargetMessage>
 
   <!-- ============================================= -->
   <!-- FIELD MAPPINGS -->
   <!-- ============================================= -->
+  <!-- NOTE ON THIS REVISION (v1.1.0): PseudoCode blocks simplified to
+       short, single-line executable formulas per supervisor review, using
+       the FICdtTrf/CdtTrfTxInf structure specific to pacs.009 (distinct
+       from FIToFICstmrCdtTrf used by pacs.008 in the MT103 mapping).
+       SourceField/TargetField references kept exactly as in the original
+       file. -->
   <FieldMappings>
 
     <!-- ==================== MAPPING 01 ==================== -->
+    <!-- MERGED (was MAPPING_01 + MAPPING_03): both extracted from the same
+         source field :21: into two target paths (GrpHdr/MsgId and
+         CdtTrfTxInf/PmtId/TxId). Previously split into two separate Mapping
+         entries with the same SourceField ref, which meant the RAG's exact
+         lookup (one SOURCE_FIELD -> one FIELD_MAPPING) could only ever
+         return ONE of the two target paths, non-deterministically — Generate
+         Elements would end up with a MappingElement for TxId but NONE for
+         GrpHdr.MsgId, silently falling back to an auto-generated message ID.
+         Merged into a single Mapping with TargetFields (multiple), the same
+         pattern already used correctly elsewhere in this file (:56A:/:57A:
+         are each their own field, but :50K:/:59: in MT103_to_pacs008.xml is
+         the precedent for this exact shape). -->
     <Mapping id="MAPPING_01">
       <SourceField ref="FIELD_02"/>
-      <TargetField ref="TARGET_01"/>
+      <TargetFields>
+        <TargetField ref="TARGET_01"/>
+        <TargetField ref="TARGET_05"/>
+      </TargetFields>
       <MappingFormula>
         <Type>DIRECT_COPY</Type>
-        <Expression>target.MsgId = source.field_21</Expression>
+        <Expression>GrpHdr.MsgId = MT.F21.trim(); CdtTrfTxInf.PmtId.TxId = MT.F21.trim()</Expression>
         <PseudoCode>
-          related_reference = source.field_21
-          message_id = related_reference
-          return message_id
+          GrpHdr.MsgId = MT.F21.trim()
+          CdtTrfTxInf.PmtId.TxId = MT.F21.trim()
         </PseudoCode>
       </MappingFormula>
       <Conditions>
@@ -289,13 +359,13 @@
       </GlobalVariables>
       <General>
         <Criticality>CRITICAL</Criticality>
-        <ImpactIfFails>Message rejected - cannot process without unique identifier</ImpactIfFails>
-        <BusinessRationale>Related reference from MT202 field 21 becomes the pacs.009 message ID for traceability</BusinessRationale>
-        <PerformanceImpact>NEGLIGIBLE (direct string copy)</PerformanceImpact>
-        <AuditRequirement>Message ID logged for cross-message audit trail. Retained AUDIT_RETENTION_YEARS years.</AuditRequirement>
+        <ImpactIfFails>Message rejected without a unique identifier, and cover payment linkage to the underlying MT103 is lost without TxId.</ImpactIfFails>
+        <BusinessRationale>Related reference from MT202 field 21 becomes both the pacs.009 message ID for traceability AND the transaction ID linking this cover payment to the original MT103 customer transfer.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (direct string copy, done twice)</PerformanceImpact>
+        <AuditRequirement>Message ID and related reference both logged for cross-message audit trail. Retained AUDIT_RETENTION_YEARS years.</AuditRequirement>
         <ComplianceRequirement>Unique reference required per SWIFT ISO 15022 MT202 standards. Enables linkage between cover payment and underlying MT103.</ComplianceRequirement>
         <DataPrivacy>Reference is operational identifier. No PII. No GDPR special handling required.</DataPrivacy>
-        <MigrationNote>MT202 field 21 (Related Reference) maps to GrpHdr.MsgId in pacs.009 for cover payment traceability.</MigrationNote>
+        <MigrationNote>MT202 field 21 (Related Reference) maps to BOTH GrpHdr.MsgId (cover payment traceability) and CdtTrfTxInf.PmtId.TxId (link to underlying MT103) in pacs.009.</MigrationNote>
         <CachingStrategy>No caching - direct copy from source field.</CachingStrategy>
       </General>
     </Mapping>
@@ -306,11 +376,9 @@
       <TargetField ref="TARGET_04"/>
       <MappingFormula>
         <Type>DIRECT_COPY</Type>
-        <Expression>target.EndToEndId = source.field_20</Expression>
+        <Expression>CdtTrfTxInf.PmtId.EndToEndId = MT.F20.trim()</Expression>
         <PseudoCode>
-          transaction_reference = source.field_20
-          end_to_end_id = transaction_reference
-          return end_to_end_id
+          CdtTrfTxInf.PmtId.EndToEndId = MT.F20.trim()
         </PseudoCode>
       </MappingFormula>
       <Conditions>
@@ -339,52 +407,35 @@
       </General>
     </Mapping>
 
-    <!-- ==================== MAPPING 03 ==================== -->
-    <Mapping id="MAPPING_03">
-      <SourceField ref="FIELD_02"/>
-      <TargetField ref="TARGET_05"/>
-      <MappingFormula>
-        <Type>DIRECT_COPY</Type>
-        <Expression>target.TxId = source.field_21</Expression>
-        <PseudoCode>
-          related_ref = source.field_21
-          transaction_id = related_ref
-          return transaction_id
-        </PseudoCode>
-      </MappingFormula>
-      <General>
-        <Criticality>MEDIUM</Criticality>
-        <ImpactIfFails>Cover payment linkage to MT103 lost</ImpactIfFails>
-        <BusinessRationale>Field 21 links MT202 cover payment to original MT103 customer transfer</BusinessRationale>
-        <PerformanceImpact>NEGLIGIBLE (direct string copy)</PerformanceImpact>
-        <AuditRequirement>Related reference stored for cross-message audit trail.</AuditRequirement>
-        <ComplianceRequirement>Required for correspondent banking audit trail and reconciliation.</ComplianceRequirement>
-        <DataPrivacy>Reference is operational data. No PII.</DataPrivacy>
-        <MigrationNote>MT202 field 21 maps to TxId to preserve the link between cover payment and underlying transaction.</MigrationNote>
-        <CachingStrategy>No caching - direct copy.</CachingStrategy>
-      </General>
-    </Mapping>
 
     <!-- ==================== MAPPING 04 ==================== -->
+    <!-- MERGED (was MAPPING_04 + MAPPING_05): both extract from the same
+         source field :32A: into two target paths (Amt/InstdAmt and
+         IntrBkSttlmDt). Previously split into two separate Mapping entries
+         with the same SourceField ref AND — critically — the ORIGINAL
+         MAPPING_05 pointed its TargetField at TARGET_06 (Amt/InstdAmt) by
+         mistake instead of a dedicated settlement-date target, so its
+         IntrBkSttlmDt formula was permanently orphaned: Generate Elements
+         could only ever create a MappingElement for whichever of the two
+         FieldMapping chunks Qdrant happened to return first, and even when
+         it picked MAPPING_05, the (wrong) target_path pointed back at
+         Amt/InstdAmt, silently overwriting the amount with a date-formatting
+         formula's output. Fixed by merging into one Mapping (TargetFields)
+         and adding TARGET_12 (IntrBkSttlmDt) to the target field list above,
+         which this mapping now correctly references. -->
     <Mapping id="MAPPING_04">
       <SourceField ref="FIELD_03"/>
-      <TargetField ref="TARGET_06"/>
+      <TargetFields>
+        <TargetField ref="TARGET_06"/>
+        <TargetField ref="TARGET_12"/>
+      </TargetFields>
       <MappingFormula>
         <Type>EXTRACTION_AND_FORMATTING</Type>
-        <Expression>
-          currency = extract_currency(source.field_32A)
-          amount = extract_amount(source.field_32A)
-          target.InstdAmt = create_xml_amount(amount, currency)
-        </Expression>
+        <Expression>CdtTrfTxInf.Amt.InstdAmt = decimal(MT.F32A.amount.replace(",",".")); CdtTrfTxInf.IntrBkSttlmDt = expandCentury(MT.F32A.date, "yyMMdd", "20xx")</Expression>
         <PseudoCode>
-          field_32a = source.field_32A
-          date_str = substring(field_32a, 1, 6)
-          currency_code = substring(field_32a, 7, 3)
-          amount_string = substring(field_32a, 10)
-          amount_normalized = replace(amount_string, ",", ".")
-          amount_decimal = parse_decimal(amount_normalized)
-          xml_amount = { value: amount_decimal, currency: currency_code }
-          return xml_amount
+          CdtTrfTxInf.Amt.InstdAmt = decimal(MT.F32A.amount.replace(",","."))
+          CdtTrfTxInf.Amt.InstdAmt.@Ccy = MT.F32A.currency
+          CdtTrfTxInf.IntrBkSttlmDt = expandCentury(MT.F32A.date, "yyMMdd", "20xx")
         </PseudoCode>
       </MappingFormula>
       <Conditions>
@@ -403,44 +454,14 @@
       </Conditions>
       <General>
         <Criticality>CRITICAL</Criticality>
-        <ImpactIfFails>Interbank settlement fails - incorrect amount causes financial loss</ImpactIfFails>
-        <BusinessRationale>Core financial value of the interbank transfer</BusinessRationale>
-        <PerformanceImpact>LOW (string parsing and decimal conversion)</PerformanceImpact>
-        <AuditRequirement>Amount logged with original SWIFT format and converted ISO 20022 format.</AuditRequirement>
-        <ComplianceRequirement>Accurate amount required for settlement finality and regulatory reporting.</ComplianceRequirement>
-        <DataPrivacy>Transaction amount is not PII.</DataPrivacy>
-        <MigrationNote>SWIFT uses comma decimal separator (500000,). ISO 20022 uses dot (500000.00). Conversion mandatory.</MigrationNote>
+        <ImpactIfFails>Interbank settlement fails - incorrect amount causes financial loss, and an incorrect/missing settlement date causes value dating errors in RTGS systems.</ImpactIfFails>
+        <BusinessRationale>Field 32A carries both the core financial value of the interbank transfer AND the value date determining when funds are settled between institutions.</BusinessRationale>
+        <PerformanceImpact>LOW (string parsing, decimal conversion, and date parsing)</PerformanceImpact>
+        <AuditRequirement>Amount logged with original SWIFT format and converted ISO 20022 format. Value date logged for settlement reconciliation.</AuditRequirement>
+        <ComplianceRequirement>Accurate amount required for settlement finality and regulatory reporting. Correct value date required for same-day settlement systems (RTGS).</ComplianceRequirement>
+        <DataPrivacy>Transaction amount and date are not PII.</DataPrivacy>
+        <MigrationNote>SWIFT uses comma decimal separator (500000,); ISO 20022 uses dot (500000.00) — conversion mandatory. SWIFT date format YYMMDD converts to ISO 8601 YYYY-MM-DD via expandCentury().</MigrationNote>
         <CachingStrategy>No caching - direct extraction from source field.</CachingStrategy>
-      </General>
-    </Mapping>
-
-    <!-- ==================== MAPPING 05 ==================== -->
-    <Mapping id="MAPPING_05">
-      <SourceField ref="FIELD_03"/>
-      <TargetField ref="TARGET_06"/>
-      <MappingFormula>
-        <Type>EXTRACTION</Type>
-        <Expression>target.ReqdExctnDt = parse_date(extract_date(source.field_32A))</Expression>
-        <PseudoCode>
-          field_32a = source.field_32A
-          date_str = substring(field_32a, 1, 6)
-          year = "20" + substring(date_str, 1, 2)
-          month = substring(date_str, 3, 2)
-          day = substring(date_str, 5, 2)
-          iso_date = year + "-" + month + "-" + day
-          return iso_date
-        </PseudoCode>
-      </MappingFormula>
-      <General>
-        <Criticality>HIGH</Criticality>
-        <ImpactIfFails>Settlement date incorrect causing value dating errors</ImpactIfFails>
-        <BusinessRationale>Value date from field 32A determines when funds are settled between institutions</BusinessRationale>
-        <PerformanceImpact>NEGLIGIBLE (date parsing)</PerformanceImpact>
-        <AuditRequirement>Value date logged for settlement reconciliation.</AuditRequirement>
-        <ComplianceRequirement>Correct value date required for same-day settlement systems (RTGS).</ComplianceRequirement>
-        <DataPrivacy>Date is operational data. No PII.</DataPrivacy>
-        <MigrationNote>SWIFT date format YYMMDD converts to ISO 8601 YYYY-MM-DD format.</MigrationNote>
-        <CachingStrategy>No caching.</CachingStrategy>
       </General>
     </Mapping>
 
@@ -450,12 +471,9 @@
       <TargetField ref="TARGET_07"/>
       <MappingFormula>
         <Type>DIRECT_COPY</Type>
-        <Expression>target.InstgAgt.BICFI = extract_bic(source.field_52A)</Expression>
+        <Expression>CdtTrfTxInf.InstgAgt.FinInstnId.BICFI = extractBIC(MT.F52A)</Expression>
         <PseudoCode>
-          field_52a = source.field_52A
-          bic = extract_bic_from_field(field_52a)
-          instructing_agent_bic = validate_bic(bic)
-          return instructing_agent_bic
+          CdtTrfTxInf.InstgAgt.FinInstnId.BICFI = extractBIC(MT.F52A)
         </PseudoCode>
       </MappingFormula>
       <Conditions>
@@ -495,19 +513,9 @@
       <TargetField ref="TARGET_08"/>
       <MappingFormula>
         <Type>CONDITIONAL_COPY</Type>
-        <Expression>
-          IF source.field_56A != null THEN
-            target.IntrmyAgt1.BICFI = extract_bic(source.field_56A)
-          ENDIF
-        </Expression>
+        <Expression>if(MT.F56A) CdtTrfTxInf.IntrmyAgt1.FinInstnId.BICFI = extractBIC(MT.F56A)</Expression>
         <PseudoCode>
-          field_56a = source.field_56A
-          if (field_56a is not null) then
-            intermediary_bic = extract_bic_from_field(field_56a)
-            return validate_bic(intermediary_bic)
-          else
-            return null
-          endif
+          if(MT.F56A) CdtTrfTxInf.IntrmyAgt1.FinInstnId.BICFI = extractBIC(MT.F56A)
         </PseudoCode>
       </MappingFormula>
       <General>
@@ -529,19 +537,9 @@
       <TargetField ref="TARGET_09"/>
       <MappingFormula>
         <Type>CONDITIONAL_COPY</Type>
-        <Expression>
-          IF source.field_57A != null THEN
-            target.CdtrAgt.BICFI = extract_bic(source.field_57A)
-          ENDIF
-        </Expression>
+        <Expression>if(MT.F57A) CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI = extractBIC(MT.F57A)</Expression>
         <PseudoCode>
-          field_57a = source.field_57A
-          if (field_57a is not null) then
-            creditor_agent_bic = extract_bic_from_field(field_57a)
-            return validate_bic(creditor_agent_bic)
-          else
-            return null
-          endif
+          if(MT.F57A) CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI = extractBIC(MT.F57A)
         </PseudoCode>
       </MappingFormula>
       <General>
@@ -563,11 +561,9 @@
       <TargetField ref="TARGET_10"/>
       <MappingFormula>
         <Type>DIRECT_COPY</Type>
-        <Expression>target.Cdtr.FinInstnId.BICFI = extract_bic(source.field_58A)</Expression>
+        <Expression>CdtTrfTxInf.Cdtr.FinInstnId.BICFI = extractBIC(MT.F58A)</Expression>
         <PseudoCode>
-          field_58a = source.field_58A
-          beneficiary_bic = extract_bic_from_field(field_58a)
-          return validate_bic(beneficiary_bic)
+          CdtTrfTxInf.Cdtr.FinInstnId.BICFI = extractBIC(MT.F58A)
         </PseudoCode>
       </MappingFormula>
       <Conditions>
@@ -613,21 +609,9 @@
       <TargetField ref="TARGET_11"/>
       <MappingFormula>
         <Type>CONDITIONAL_COPY</Type>
-        <Expression>
-          IF source.field_72 != null THEN
-            target.InstrForCdtrAgt.InstrInf = normalize(source.field_72)
-          ENDIF
-        </Expression>
+        <Expression>if(MT.F72) CdtTrfTxInf.InstrForCdtrAgt.InstrInf = MT.F72.joinLines().normalize()</Expression>
         <PseudoCode>
-          field_72 = source.field_72
-          if (field_72 is not null) then
-            lines = split_by_newline(field_72)
-            instruction_text = join(lines, " ")
-            instruction_text = trim(normalize_whitespace(instruction_text))
-            return instruction_text
-          else
-            return null
-          endif
+          if(MT.F72) CdtTrfTxInf.InstrForCdtrAgt.InstrInf = MT.F72.joinLines().normalize()
         </PseudoCode>
       </MappingFormula>
       <General>
@@ -638,8 +622,74 @@
         <AuditRequirement>Instruction information logged with transaction for reconciliation.</AuditRequirement>
         <ComplianceRequirement>Cover payment reference must be preserved for correspondent banking audit trail.</ComplianceRequirement>
         <DataPrivacy>May contain payment references. No direct PII typically.</DataPrivacy>
-        <MigrationNote>MT202 field 72 (Sender to Receiver Information) maps to pacs.009 InstrForCdtrAgt.InstrInf. /BNF/ prefix used for beneficiary information, /ACC/ for account information.</MigrationNote>
+        <MigrationNote>MT202 field 72 (Sender to Receiver Information) maps to pacs.009 InstrForCdtrAgt.InstrInf. joinLines()/normalize() merge and clean the multi-line free text. /BNF/ prefix used for beneficiary information, /ACC/ for account information.</MigrationNote>
         <CachingStrategy>No caching required.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 11 ==================== -->
+    <!-- ENRICHMENT: :53A:/:54A: had no coverage at all — mirrors the same
+         correspondent-chain fields added to MT103_to_pacs008.xml. -->
+    <Mapping id="MAPPING_11">
+      <SourceField ref="FIELD_09"/>
+      <TargetField ref="TARGET_13"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>CdtTrfTxInf.PrvsInstgAgt1.FinInstnId.BICFI = extractBIC(MT.F53A)</Expression>
+        <PseudoCode>
+          CdtTrfTxInf.PrvsInstgAgt1.FinInstnId.BICFI = extractBIC(MT.F53A)
+        </PseudoCode>
+      </MappingFormula>
+      <Conditions>
+        <Condition priority="1">
+          <Type>OPTIONAL_FIELD</Type>
+          <Expression>true</Expression>
+          <Action>PROCESS if present, skip if null</Action>
+          <ElseAction>N/A - field is optional</ElseAction>
+        </Condition>
+      </Conditions>
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Correspondent banking chain incomplete — reconciliation and STP at intermediary banks may fail.</ImpactIfFails>
+        <BusinessRationale>Field 53A identifies the sender's correspondent bank in the interbank routing chain, required when the sender doesn't have a direct account relationship with the receiver.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (BIC extraction only)</PerformanceImpact>
+        <AuditRequirement>Correspondent BIC logged as part of the full routing chain audit trail.</AuditRequirement>
+        <ComplianceRequirement>Full routing chain transparency required for correspondent banking due diligence (FATF Recommendation 16).</ComplianceRequirement>
+        <DataPrivacy>BIC is an institution identifier, not PII.</DataPrivacy>
+        <MigrationNote>MT202 field 53A maps to PrvsInstgAgt1 in pacs.009's payment chain, matching the standard SWIFT MT-ISO20022 crosswalk (same target used by MT103's :53A: mapping).</MigrationNote>
+        <CachingStrategy>No caching - direct extraction from source field.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 12 ==================== -->
+    <Mapping id="MAPPING_12">
+      <SourceField ref="FIELD_10"/>
+      <TargetField ref="TARGET_14"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>CdtTrfTxInf.InstdAgt.FinInstnId.BICFI = extractBIC(MT.F54A)</Expression>
+        <PseudoCode>
+          CdtTrfTxInf.InstdAgt.FinInstnId.BICFI = extractBIC(MT.F54A)
+        </PseudoCode>
+      </MappingFormula>
+      <Conditions>
+        <Condition priority="1">
+          <Type>OPTIONAL_FIELD</Type>
+          <Expression>true</Expression>
+          <Action>PROCESS if present, skip if null</Action>
+          <ElseAction>N/A - field is optional</ElseAction>
+        </Condition>
+      </Conditions>
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Correspondent banking chain incomplete on the receiving side — settlement may be delayed.</ImpactIfFails>
+        <BusinessRationale>Field 54A identifies the receiver's correspondent bank, required when the receiver doesn't have a direct account relationship with the sender.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (BIC extraction only)</PerformanceImpact>
+        <AuditRequirement>Correspondent BIC logged as part of the full routing chain audit trail.</AuditRequirement>
+        <ComplianceRequirement>Full routing chain transparency required for correspondent banking due diligence (FATF Recommendation 16).</ComplianceRequirement>
+        <DataPrivacy>BIC is an institution identifier, not PII.</DataPrivacy>
+        <MigrationNote>MT202 field 54A maps to InstdAgt in pacs.009's payment chain, matching the standard SWIFT MT-ISO20022 crosswalk (same target used by MT103's :54A: mapping).</MigrationNote>
+        <CachingStrategy>No caching - direct extraction from source field.</CachingStrategy>
       </General>
     </Mapping>
 

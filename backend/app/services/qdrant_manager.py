@@ -145,15 +145,18 @@ class QdrantManager:
                 return False
             
             # Prepare points for Qdrant
+            # Deterministic ID derived from chunk_id so re-indexing the same
+            # reference XML upserts (replaces) the existing point instead of
+            # accumulating a duplicate with stale content alongside it.
             points = []
             for doc, meta, id_, emb in valid_data:
                 points.append(
                     PointStruct(
-                        id=str(uuid.uuid4()), 
+                        id=str(uuid.uuid5(uuid.NAMESPACE_DNS, id_)),
                         vector=emb,
                         payload={
                             "content": doc,
-                            "chunk_id": id_, 
+                            "chunk_id": id_,
                             **meta  # Unpack metadata into payload
                         }
                     )

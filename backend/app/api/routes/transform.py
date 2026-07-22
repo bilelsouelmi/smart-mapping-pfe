@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Response
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from typing import Dict, Any
+from sqlalchemy import desc
 import logging
 import json
 import datetime
@@ -12,11 +12,8 @@ from app.core.deps import get_current_user
 from app.models.user import User
 from app.models.message_description import MessageDescription
 from app.models.mapping_formula import MappingFormula
-from app.models.transformation_job import TransformationJob, JobStatus
-from app.models.validation_report import ValidationReport
 from app.models.file_upload import FileUpload
 from app.services.file_processor import FileProcessor
-from app.services.iso20022_generator import iso20022_generator
 from app.config import settings
 
 router = APIRouter()
@@ -27,444 +24,6 @@ file_processor = FileProcessor()
 # Output directory
 OUTPUT_DIR = Path(settings.UPLOAD_DIR).parent / "outputs"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def _calculate_validation(source_data, transformed_data, formulas) -> Dict[str, Any]:
-    """
-    Calcule les métriques de validation entre données source et transformées.
-    """
-    total_cells = 0
-    matching_cells = 0
-    differing_cells = 0
-    differences = []
-
-    formula_map = {f.source_path: f.target_path for f in formulas}
-
-    for row_idx, (src_row, tgt_row) in enumerate(zip(source_data, transformed_data)):
-        for src_col, tgt_col in formula_map.items():
-            total_cells += 1
-            src_value = str(src_row.get(src_col, '')) if src_row.get(src_col) is not None else ''
-            tgt_value = str(tgt_row.get(tgt_col, '')) if tgt_row.get(tgt_col) is not None else ''
-
-            if src_value == tgt_value:
-                matching_cells += 1
-            else:
-                differing_cells += 1
-                if len(differences) < 100:  # Max 100 differences
-                    diff_type = "MISSING_VALUE" if not tgt_value else "VALUE_MISMATCH"
-                    differences.append({
-                        "row_number": row_idx + 1,
-                        "column_name": src_col,
-                        "expected_value": src_value,
-                        "generated_value": tgt_value,
-                        "difference_type": diff_type
-                    })
-
-    accuracy = (matching_cells / total_cells * 100) if total_cells > 0 else 0.0
-    row_count_match = len(source_data) == len(transformed_data)
-    column_count_match = True  # simplified
-
-    if accuracy >= 95:
-        quality = "EXCELLENT"
-        recommendation = "Mapping is highly accurate. Ready for production."
-    elif accuracy >= 80:
-        quality = "GOOD"
-        recommendation = "Mapping is good. Review differing cells before production."
-    elif accuracy >= 60:
-        quality = "ACCEPTABLE"
-        recommendation = "Mapping needs improvement. Review transformation rules."
-    else:
-        quality = "POOR"
-        recommendation = "Mapping requires significant rework. Review all rules."
-
-    return {
-        "accuracy_percentage": round(accuracy, 2),
-        "row_count_match": row_count_match,
-        "column_count_match": column_count_match,
-        "total_cells": total_cells,
-        "matching_cells": matching_cells,
-        "differing_cells": differing_cells,
-        "differences": differences,
-        "overall_quality": quality,
-        "recommendation": recommendation
-    }
-
-
-async def _run_transformation(
-    job_id: int,
-    message_description_id: int,
-    db: Session
-):
-    """
-    Exécute la transformation en background et met à jour le job.
-    """
-    job = db.query(TransformationJob).filter(TransformationJob.id == job_id).first()
-    if not job:
-        return
-
-    try:
-        # ── Start job ─────────────────────────────────────────────────────────
-        job.status = JobStatus.RUNNING
-        job.started_at = datetime.datetime.utcnow()
-        job.progress = 10.0
-        db.commit()
-
-        # ── Get MessageDescription ────────────────────────────────────────────
-        message_desc = db.query(MessageDescription).filter(
-            MessageDescription.id == message_description_id
-        ).first()
-
-        if not message_desc:
-            raise Exception(f"MessageDescription {message_description_id} not found")
-
-        job.progress = 20.0
-        db.commit()
-
-        # ── Get formulas ──────────────────────────────────────────────────────
-        # 1. Formulas du message_description courant
-        current_formulas = db.query(MappingFormula).filter(
-            MappingFormula.message_description_id == message_description_id
-        ).all()
-
-        # 2. Colonnes du fichier courant
-        current_columns = set()
-        if message_desc.column_structure:
-            current_columns = {col.get('name') for col in message_desc.column_structure if col.get('name')}
-        if not current_columns and message_desc.sample_data:
-            current_columns = set(message_desc.sample_data[0].keys())
-
-        # 3. Chercher formulas de TOUS les autres fichiers par nom de colonne
-        # → réutilisation automatique si même source_path
-        all_other_formulas = db.query(MappingFormula).filter(
-            MappingFormula.message_description_id != message_description_id,
-            MappingFormula.source_path.in_(current_columns)
-        ).order_by(MappingFormula.created_at.desc()).all()
-
-        # 4. Fusionner — current prioritaires, autres comblent les manquants
-        current_sources = {f.source_path for f in current_formulas}
-        seen_sources = set(current_sources)
-        unique_extra = []
-        for f in all_other_formulas:
-            if f.source_path not in seen_sources:
-                seen_sources.add(f.source_path)
-                unique_extra.append(f)
-
-        formulas = current_formulas + unique_extra
-
-        logger.info(f"📋 Formulas: {len(current_formulas)} current + {len(unique_extra)} reused from other files = {len(formulas)} total")
-
-        if not formulas:
-            raise Exception("No mapping formulas found. Please accept some suggestions first.")
-
-        job.progress = 30.0
-        db.commit()
-
-        # ── Load source data ──────────────────────────────────────────────────
-        # Try to load full file if file_upload exists, else use sample_data
-        source_data = []
-
-        if message_desc.file_upload_id:
-            file_upload = db.query(FileUpload).filter(
-                FileUpload.id == message_desc.file_upload_id
-            ).first()
-
-            if file_upload and Path(file_upload.file_path).exists():
-                try:
-                    file_info = file_processor.process_file(file_upload.file_path)
-                    source_data = file_info.get('sample_data', [])
-                    logger.info(f"Loaded {len(source_data)} rows from file: {file_upload.file_path}")
-                except Exception as e:
-                    logger.warning(f"Could not load full file, using sample_data: {e}")
-
-        if not source_data:
-            source_data = message_desc.sample_data or []
-            logger.info(f"Using sample_data: {len(source_data)} rows")
-
-        if not source_data:
-            raise Exception("No source data available")
-
-        job.progress = 50.0
-        db.commit()
-
-        # ── Apply transformation ──────────────────────────────────────────────
-        formula_dicts = [
-            {
-                "target_column": f.target_path,
-                "source_column": f.source_path,
-                "transformation_type": f.transformation_type,
-                "transformation_rule": f.transformation_rule
-            }
-            for f in formulas
-        ]
-
-        transformed_data = file_processor.apply_transformation(
-            data=source_data,
-            mapping_formulas=formula_dicts
-        )
-
-        job.progress = 70.0
-        db.commit()
-
-        # ── Save output file ──────────────────────────────────────────────────
-        # Generate ISO 20022 XML if MT file, else JSON
-        is_mt = message_desc.file_type == 'XML_MT' and message_desc.iso_target
-
-        if is_mt:
-            # Generate real ISO 20022 XML
-            xml_content = iso20022_generator.generate(
-                mapped_data=transformed_data[0] if transformed_data else {},
-                iso_target=message_desc.iso_target,
-                mt_type=message_desc.mt_type
-            )
-            output_filename = f"transformed_{message_desc.file_name.replace('.', '_')}_{message_description_id}_{job_id}.xml"
-            output_path = OUTPUT_DIR / output_filename
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(xml_content)
-            logger.info(f"✅ ISO 20022 XML generated: {output_filename}")
-        else:
-            output_filename = f"transformed_{message_desc.file_name.replace('.', '_')}_{message_description_id}_{job_id}.json"
-            output_path = OUTPUT_DIR / output_filename
-            with open(output_path, 'w', encoding='utf-8') as f:
-                json.dump(transformed_data, f, indent=2, ensure_ascii=False)
-
-        job.progress = 85.0
-        db.commit()
-
-        # ── Calculate validation ──────────────────────────────────────────────
-        validation_metrics = _calculate_validation(source_data, transformed_data, formulas)
-
-        validation_report = ValidationReport(
-            transformation_job_id=job_id,
-            accuracy_percentage=validation_metrics['accuracy_percentage'],
-            row_count_match=validation_metrics['row_count_match'],
-            column_count_match=validation_metrics['column_count_match'],
-            total_cells=validation_metrics['total_cells'],
-            matching_cells=validation_metrics['matching_cells'],
-            differing_cells=validation_metrics['differing_cells'],
-            differences=validation_metrics['differences'],
-            overall_quality=validation_metrics['overall_quality'],
-            recommendation=validation_metrics['recommendation']
-        )
-        db.add(validation_report)
-
-        # ── Update formulas stats ─────────────────────────────────────────────
-        for formula in formulas:
-            formula.usage_count += 1
-            formula.success_rate = validation_metrics['accuracy_percentage']
-
-        # ── Complete job ──────────────────────────────────────────────────────
-        job.status = JobStatus.COMPLETED
-        job.progress = 100.0
-        job.completed_at = datetime.datetime.utcnow()
-        job.error_message = None
-
-        # ── NOUVEAU : Mettre à jour quality_score + mapping_completion ─────────
-        quality_map = {"EXCELLENT": 100, "GOOD": 80, "ACCEPTABLE": 60, "POOR": 30}
-        quality_score = quality_map.get(validation_metrics['overall_quality'], 0)
-        message_desc.quality_score = quality_score
-        message_desc.status = 'validated'
-
-        # Calculer mapping_completion depuis les formulas
-        total_columns = len(message_desc.column_structure or [])
-        if total_columns > 0:
-            mapped_count = db.query(MappingFormula).filter(
-                MappingFormula.message_description_id == message_description_id,
-                MappingFormula.target_path != '',
-                MappingFormula.target_path != None
-            ).count()
-            message_desc.mapping_completion = min(int((mapped_count / total_columns) * 100), 100)
-        # ── FIN NOUVEAU ───────────────────────────────────────────────────────
-
-        db.commit()
-
-        logger.info(f"✅ TransformationJob {job_id} completed — {len(transformed_data)} rows, quality: {validation_metrics['overall_quality']}")
-
-    except Exception as e:
-        logger.error(f"❌ TransformationJob {job_id} failed: {e}")
-        job.status = JobStatus.FAILED
-        job.error_message = str(e)
-        job.completed_at = datetime.datetime.utcnow()
-        db.commit()
-
-
-@router.post("/apply-mapping/{message_description_id}")
-async def apply_mapping(
-    message_description_id: int,
-    background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Lance un TransformationJob pour appliquer les mappings sur un fichier.
-    Le job s'exécute en background — utilise GET /job/{id} pour suivre le statut.
-    """
-    try:
-        # Verify MessageDescription exists
-        message_desc = db.query(MessageDescription).filter(
-            MessageDescription.id == message_description_id
-        ).first()
-
-        if not message_desc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"MessageDescription {message_description_id} not found"
-            )
-
-        # ── Check formulas — current file OR reusable from other files ─────────
-        current_count = db.query(MappingFormula).filter(
-            MappingFormula.message_description_id == message_description_id
-        ).count()
-
-        if current_count == 0:
-            # Check if reusable formulas exist from other files
-            if message_desc.column_structure:
-                columns = {col.get('name') for col in message_desc.column_structure if col.get('name')}
-            elif message_desc.sample_data:
-                columns = set(message_desc.sample_data[0].keys())
-            else:
-                columns = set()
-
-            reusable_count = db.query(MappingFormula).filter(
-                MappingFormula.message_description_id != message_description_id,
-                MappingFormula.source_path.in_(columns)
-            ).count() if columns else 0
-
-            if reusable_count == 0:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="No mapping formulas found. Please accept some suggestions first."
-                )
-            logger.info(f"✅ No current formulas but {reusable_count} reusable from other files")
-
-        # Get file_upload_id
-        file_upload_id = message_desc.file_upload_id
-        if not file_upload_id:
-            # Try to find a FileUpload by filename
-            file_upload = db.query(FileUpload).filter(
-                FileUpload.user_id == current_user.id,
-                FileUpload.original_filename == message_desc.file_name
-            ).order_by(FileUpload.upload_date.desc()).first()
-            file_upload_id = file_upload.id if file_upload else None
-
-        if not file_upload_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No FileUpload found for this MessageDescription. Please re-upload the file."
-            )
-
-        # Create TransformationJob
-        job = TransformationJob(
-            user_id=current_user.id,
-            file_upload_id=file_upload_id,
-            job_name=f"Transform {message_desc.file_name} → {message_description_id}",
-            status=JobStatus.PENDING,
-            progress=0.0
-        )
-        db.add(job)
-        db.commit()
-        db.refresh(job)
-
-        logger.info(f"🚀 TransformationJob {job.id} created for MessageDescription {message_description_id}")
-
-        # Run in background
-        background_tasks.add_task(
-            _run_transformation,
-            job_id=job.id,
-            message_description_id=message_description_id,
-            db=db
-        )
-
-        return {
-            "message": "Transformation job started",
-            "job_id": job.id,
-            "message_description_id": message_description_id,
-            "formulas_count": current_count,
-            "status": job.status,
-            "check_status_url": f"/api/transform/job/{job.id}"
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to start transformation: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to start transformation: {str(e)}"
-        )
-
-
-@router.get("/job/{job_id}")
-async def get_job_status(
-    job_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Récupère le statut d'un TransformationJob avec son ValidationReport si disponible.
-    """
-    job = db.query(TransformationJob).filter(
-        TransformationJob.id == job_id,
-        TransformationJob.user_id == current_user.id
-    ).first()
-
-    if not job:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-
-    response = {
-        "job_id": job.id,
-        "job_name": job.job_name,
-        "status": job.status,
-        "progress": job.progress,
-        "error_message": job.error_message,
-        "started_at": job.started_at,
-        "completed_at": job.completed_at,
-        "created_at": job.created_at,
-        "validation_report": None
-    }
-
-    # Add validation report if job completed
-    if job.status == JobStatus.COMPLETED and job.validation_reports:
-        report = job.validation_reports[0]
-        response["validation_report"] = {
-            "accuracy_percentage": report.accuracy_percentage,
-            "overall_quality": report.overall_quality,
-            "recommendation": report.recommendation,
-            "total_cells": report.total_cells,
-            "matching_cells": report.matching_cells,
-            "differing_cells": report.differing_cells,
-            "row_count_match": report.row_count_match,
-            "differences": report.differences[:10] if report.differences else []
-        }
-
-    return response
-
-
-@router.get("/jobs")
-async def list_jobs(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Liste tous les TransformationJobs de l'utilisateur.
-    """
-    jobs = db.query(TransformationJob).filter(
-        TransformationJob.user_id == current_user.id
-    ).order_by(TransformationJob.created_at.desc()).limit(20).all()
-
-    return {
-        "total": len(jobs),
-        "jobs": [
-            {
-                "job_id": j.id,
-                "job_name": j.job_name,
-                "status": j.status,
-                "progress": j.progress,
-                "created_at": j.created_at,
-                "completed_at": j.completed_at
-            }
-            for j in jobs
-        ]
-    }
 
 
 @router.get("/outputs")
@@ -478,7 +37,7 @@ async def list_outputs(
         output_files = []
 
         if OUTPUT_DIR.exists():
-            for file_path in list(OUTPUT_DIR.glob("*.json")) + list(OUTPUT_DIR.glob("*.xml")):
+            for file_path in list(OUTPUT_DIR.glob("*.json")) + list(OUTPUT_DIR.glob("*.xml")) + list(OUTPUT_DIR.glob("*.txt")):
                 output_files.append({
                     "filename": file_path.name,
                     "size": file_path.stat().st_size,
@@ -517,7 +76,12 @@ async def download_output(
                 detail=f"File {filename} not found"
             )
 
-        media_type = 'application/xml' if filename.endswith('.xml') else 'application/json'
+        if filename.endswith('.xml'):
+            media_type = 'application/xml'
+        elif filename.endswith('.json'):
+            media_type = 'application/json'
+        else:
+            media_type = 'text/plain'
         return FileResponse(
             path=str(file_path),
             filename=filename,
@@ -532,3 +96,260 @@ async def download_output(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Download failed: {str(e)}"
         )
+
+
+@router.post("/auto")
+async def auto_transform(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Automated transformation between SWIFT MT and ISO 20022 XML formats.
+    Auto-detects file type, queries database mapping formulas, transforms,
+    saves the output, and returns the converted file.
+
+    (UNCHANGED from before — this endpoint already used the correct
+    Mapping/MappingElement/evaluate_expression engine for the MT->ISO
+    direction, and iso20022_parser/mt_generator for ISO->MT. It benefits
+    automatically from the evaluate_expression() control-flow fix made in
+    transform_mapping.py, with no changes needed here.)
+    """
+    import tempfile
+    import os
+    from app.models.mapping import Mapping, MappingElement
+    from app.services.swift_txt_parser import swift_txt_parser
+    from app.services.iso20022_parser import iso20022_parser
+    from app.services.mt_generator import mt_generator
+    from fastapi.responses import Response
+    from app.api.routes.transform_mapping import (
+        resolve_element_value,
+        set_xpath_value,
+        build_xml_from_dict,
+        extract_source_fields,
+        ISO_NAMESPACES,
+        ISO_ROOT_ELEMENTS
+    )
+
+    content = await file.read()
+    try:
+        content_str = content.decode('utf-8')
+    except Exception:
+        content_str = content.decode('latin-1')
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.tmp', delete=False, encoding='utf-8') as tmp:
+        tmp.write(content_str)
+        tmp_path = tmp.name
+
+    try:
+        is_swift_mt = swift_txt_parser.is_swift_txt(tmp_path)
+
+        if is_swift_mt:
+            logger.info("Auto-transform: Detected SWIFT MT file.")
+            parsed = swift_txt_parser.parse(tmp_path)
+            mt_type = parsed.get("mt_type", "MT103")
+            iso_target = parsed.get("iso_target", "pacs.008.001.08")
+            mt_blocks = parsed.get("mt_blocks") or {}
+            source_fields = extract_source_fields(mt_blocks)
+
+            logger.info(f"Auto-transform: mt_type={mt_type}, iso_target={iso_target}")
+
+            mapping = db.query(Mapping).filter(
+                Mapping.source == mt_type
+            ).order_by(desc(Mapping.status == 'active'), Mapping.id.desc()).first()
+
+            target_data = {}
+            mapping_source_name = "Default Mapping"
+
+            if mapping:
+                mapping_source_name = mapping.name
+                elements = db.query(MappingElement).filter(
+                    MappingElement.mapping_id == mapping.id,
+                    MappingElement.status == 'mapped'
+                ).all()
+
+                for el in elements:
+                    if not el.target_field:
+                        continue
+                    value = resolve_element_value(el, source_fields)
+                    if value:
+                        set_xpath_value(target_data, el.target_field, value)
+            else:
+                msg_desc = db.query(MessageDescription).filter(
+                    MessageDescription.mt_type == mt_type
+                ).order_by(MessageDescription.id.desc()).first()
+
+                if msg_desc:
+                    mapping_source_name = f"Formulas from {msg_desc.file_name}"
+                    formulas = db.query(MappingFormula).filter(
+                        MappingFormula.message_description_id == msg_desc.id
+                    ).all()
+
+                    formula_dicts = [
+                        {
+                            "target_column": f.target_path,
+                            "source_column": f.source_path,
+                            "transformation_type": f.transformation_type,
+                            "transformation_rule": f.transformation_rule
+                        }
+                        for f in formulas
+                    ]
+                    transformed_data = file_processor.apply_transformation(
+                        data=[source_fields],
+                        mapping_formulas=formula_dicts
+                    )
+                    if transformed_data:
+                        for k, v in transformed_data[0].items():
+                            if v:
+                                set_xpath_value(target_data, k, v)
+
+            if not target_data:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"No mappings or formulas found for {mt_type}."
+                )
+
+            if 'GrpHdr' not in target_data:
+                target_data['GrpHdr'] = {}
+            if 'MsgId' not in target_data.get('GrpHdr', {}):
+                target_data.setdefault('GrpHdr', {})['MsgId'] = f"MSG{datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+            if 'CreDtTm' not in target_data.get('GrpHdr', {}):
+                target_data.setdefault('GrpHdr', {})['CreDtTm'] = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+            target_data.setdefault('GrpHdr', {}).setdefault('NbOfTxs', '1')
+            _ctrl_sum = (
+                target_data.get('CdtTrfTxInf', {}).get('Amt', {}).get('InstdAmt', '') or
+                target_data.get('PmtInf', {}).get('Amt', '') or
+                '0'
+            )
+            if isinstance(_ctrl_sum, dict):
+                _ctrl_sum = '0'
+            target_data.setdefault('GrpHdr', {}).setdefault('CtrlSum', str(_ctrl_sum))
+
+            ordered_data = {}
+            if 'GrpHdr' in target_data:
+                ordered_data['GrpHdr'] = target_data.pop('GrpHdr')
+            ordered_data.update(target_data)
+            target_data = ordered_data
+
+            namespace = ISO_NAMESPACES.get(iso_target, ISO_NAMESPACES.get('camt.053.001.08'))
+            root_tag = ISO_ROOT_ELEMENTS.get(iso_target, 'BkToCstmrStmt')
+            xml_content = build_xml_from_dict(target_data, namespace, root_tag, iso_target)
+
+            def _get_sf(block, key):
+                sf = block.get('sub_fields', {})
+                val = sf.get(key, '')
+                return val.get('value', '') if isinstance(val, dict) else str(val)
+
+            b1 = mt_blocks.get('block1', {})
+            b2 = mt_blocks.get('block2', {})
+            b3 = mt_blocks.get('block3', {})
+            b5 = mt_blocks.get('block5', {})
+            envelope = json.dumps({
+                'block1': _get_sf(b1,'ApplicationIdentifier') + _get_sf(b1,'ServiceIdentifier') + _get_sf(b1,'LogicalTerminalAddress') + _get_sf(b1,'SessionNumber') + _get_sf(b1,'SequenceNumber'),
+                'block2_dest': _get_sf(b2,'DestinationAddress'),
+                'block2_priority': _get_sf(b2,'Priority'),
+                'block3_108': _get_sf(b3,'108') or _get_sf(b3,'Value'),
+                'block5_chk': _get_sf(b5,'CHK') or _get_sf(b5,'Value') or '000000000000',
+                # Several MT types share one ISO target (MT900/MT910 -> camt.054,
+                # MT940/MT950 -> camt.053) — without the original type preserved
+                # here, converting this XML back to SWIFT can only guess from
+                # the ISO namespace alone, which is ambiguous. See
+                # iso20022_parser.parse()'s envelope-first subtype detection.
+                'block2_msgtype': mt_type
+            })
+            xml_content = xml_content.replace(
+                '<?xml version="1.0" encoding="UTF-8"?>',
+                f'<?xml version="1.0" encoding="UTF-8"?>\n<!-- SWIFT_ENVELOPE:{envelope} -->'
+            )
+
+            out_filename = f"auto_{mt_type}_to_{iso_target.replace('.','_')}_{datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')}.xml"
+            out_path = OUTPUT_DIR / out_filename
+            with open(out_path, 'w', encoding='utf-8') as f:
+                f.write(xml_content)
+            logger.info(f"✅ Auto-transform saved: {out_filename}")
+
+            return Response(
+                content=xml_content,
+                media_type='application/xml',
+                headers={
+                    'Content-Disposition': f'attachment; filename="{out_filename}"',
+                    'X-Detected-Type': 'SWIFT_MT',
+                    'X-Target-Type': 'ISO_20022_XML',
+                    'X-Mapping-Source': mapping_source_name,
+                    'X-Message-Type': mt_type,
+                    'X-Target-Standard': iso_target
+                }
+            )
+
+        else:
+            logger.info("Auto-transform: Detected XML file.")
+            try:
+                parsed = iso20022_parser.parse(tmp_path)
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to parse XML: {str(e)}"
+                )
+
+            extracted = parsed.get('extracted_fields', {})
+            mt_type = parsed.get('mt_type', 'MT103')
+
+            if not extracted:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No fields could be extracted from XML for SWIFT generation."
+                )
+
+            import re as _re
+            envelope = {}
+            envelope_match = _re.search(r'SWIFT_ENVELOPE:({[^}]+(?:}[^}]*)*})', content_str, _re.DOTALL)
+            if envelope_match:
+                try:
+                    envelope = json.loads(envelope_match.group(1))
+                    logger.info(f"✅ Restored SWIFT envelope: {envelope}")
+                except Exception as e:
+                    logger.warning(f"Failed to parse SWIFT envelope: {e}")
+
+            # Several MT types share one ISO namespace (MT900/MT910 -> camt.054,
+            # MT940/MT950 -> camt.053), so the namespace-only guess in
+            # iso20022_parser.parse() can't distinguish them. Prefer the real
+            # type this project itself stamped into the envelope comment when
+            # it generated this XML — only falls back to the generic guess
+            # for externally-produced XML that never went through us.
+            envelope_mt_type = envelope.get('block2_msgtype')
+            if envelope_mt_type and envelope_mt_type.upper().startswith('MT'):
+                mt_type = envelope_mt_type.upper()
+
+            mt_text = mt_generator.generate(extracted, mt_type, envelope=envelope)
+
+            out_filename = f"auto_{mt_type}_{datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')}.txt"
+            out_path = OUTPUT_DIR / out_filename
+            with open(out_path, 'w', encoding='utf-8') as f:
+                f.write(mt_text)
+            logger.info(f"✅ Auto-transform saved: {out_filename}")
+
+            return Response(
+                content=mt_text,
+                media_type='text/plain',
+                headers={
+                    'Content-Disposition': f'attachment; filename="{out_filename}"',
+                    'X-Detected-Type': 'ISO_20022_XML',
+                    'X-Target-Type': 'SWIFT_MT',
+                    'X-Mapping-Source': 'XML parsing config',
+                    'X-Message-Type': mt_type
+                }
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Auto-transform error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Auto-transformation failed: {str(e)}"
+        )
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)

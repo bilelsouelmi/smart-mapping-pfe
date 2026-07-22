@@ -2,27 +2,34 @@ import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'react-toastify';
+import { Clock } from 'lucide-react';
 
 const LoginPage = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [pendingApproval, setPendingApproval] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
+    setPendingApproval(false);
 
     const result = await login(username, password);
-    
+
     if (result.success) {
       toast.success('Welcome back!');
       navigate('/dashboard');
     } else {
-      toast.error(result.error);
+      if (result.error === 'PENDING_APPROVAL') {
+        setPendingApproval(true);
+      } else {
+        toast.error(result.error);
+      }
     }
-    
+
     setLoading(false);
   };
 
@@ -30,17 +37,11 @@ const LoginPage = () => {
     <div style={{
       minHeight: '100vh',
       background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: '2rem'
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem'
     }}>
       <div style={{
-        background: 'white',
-        borderRadius: '20px',
-        padding: '3rem',
-        width: '100%',
-        maxWidth: '450px',
+        background: 'white', borderRadius: '20px', padding: '3rem',
+        width: '100%', maxWidth: '450px',
         boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
       }}>
         <h1 style={{ textAlign: 'center', marginBottom: '0.5rem', color: '#2d3748' }}>
@@ -50,40 +51,48 @@ const LoginPage = () => {
           AI-Powered Data Transformation
         </p>
 
+        {/* Pending approval message */}
+        {pendingApproval && (
+          <div style={{
+            background: '#fffbeb', border: '1px solid #f59e0b',
+            borderRadius: '12px', padding: '1rem 1.25rem',
+            marginBottom: '1.5rem', display: 'flex', gap: '0.75rem', alignItems: 'flex-start'
+          }}>
+            <Clock size={20} color="#f59e0b" style={{ flexShrink: 0, marginTop: '2px' }} />
+            <div>
+              <div style={{ fontWeight: '700', color: '#92400e', fontSize: '0.9rem' }}>
+                Account pending approval
+              </div>
+              <div style={{ color: '#b45309', fontSize: '0.82rem', marginTop: '2px' }}>
+                Your account has been created successfully but requires administrator
+                approval before you can log in. Please contact your administrator.
+              </div>
+            </div>
+          </div>
+        )}
+
         <form onSubmit={handleSubmit}>
           <div style={{ marginBottom: '1.5rem' }}>
             <label style={labelStyle}>Username</label>
             <input
-              type="text"
-              value={username}
+              type="text" value={username}
               onChange={(e) => setUsername(e.target.value)}
-              required
-              style={inputStyle}
-              placeholder="Enter your username"
+              required style={inputStyle} placeholder="Enter your username"
             />
           </div>
-
           <div style={{ marginBottom: '1.5rem' }}>
             <label style={labelStyle}>Password</label>
             <input
-              type="password"
-              value={password}
+              type="password" value={password}
               onChange={(e) => setPassword(e.target.value)}
-              required
-              style={inputStyle}
-              placeholder="Enter your password"
+              required style={inputStyle} placeholder="Enter your password"
             />
           </div>
-
-          <button
-            type="submit"
-            disabled={loading}
-            style={{
-              ...buttonStyle,
-              opacity: loading ? 0.7 : 1,
-              cursor: loading ? 'not-allowed' : 'pointer'
-            }}
-          >
+          <button type="submit" disabled={loading} style={{
+            ...buttonStyle,
+            opacity: loading ? 0.7 : 1,
+            cursor: loading ? 'not-allowed' : 'pointer'
+          }}>
             {loading ? 'Logging in...' : 'Login'}
           </button>
         </form>
@@ -100,33 +109,20 @@ const LoginPage = () => {
 };
 
 const labelStyle = {
-  display: 'block',
-  marginBottom: '0.5rem',
-  color: '#2d3748',
-  fontWeight: '500'
+  display: 'block', marginBottom: '0.5rem', color: '#2d3748', fontWeight: '500'
 };
 
 const inputStyle = {
-  width: '100%',
-  padding: '0.75rem',
-  border: '2px solid #e2e8f0',
-  borderRadius: '8px',
-  fontSize: '1rem',
-  transition: 'border-color 0.3s',
-  boxSizing: 'border-box'
+  width: '100%', padding: '0.75rem',
+  border: '2px solid #e2e8f0', borderRadius: '8px',
+  fontSize: '1rem', transition: 'border-color 0.3s', boxSizing: 'border-box'
 };
 
 const buttonStyle = {
-  width: '100%',
-  padding: '0.75rem',
+  width: '100%', padding: '0.75rem',
   background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-  color: 'white',
-  border: 'none',
-  borderRadius: '8px',
-  fontSize: '1rem',
-  fontWeight: 'bold',
-  cursor: 'pointer',
-  transition: 'transform 0.2s'
+  color: 'white', border: 'none', borderRadius: '8px',
+  fontSize: '1rem', fontWeight: 'bold', cursor: 'pointer', transition: 'transform 0.2s'
 };
 
 export default LoginPage;

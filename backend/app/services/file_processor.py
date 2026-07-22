@@ -210,6 +210,37 @@ class FileProcessor:
         try:
             file_type = cls.detect_file_type(file_path)
 
+            # Detect ISO 20022 XML first
+            if file_type == "XML":
+                try:
+                    from app.services.iso20022_parser import iso20022_parser
+                    iso_type = iso20022_parser.detect_iso_type(file_path)
+                    if iso_type:
+                        # mt_type/iso_target still come from iso20022_parser
+                        # (subtype disambiguation etc.) — but the actual
+                        # field structure comes from the generic XML
+                        # path-walker instead of iso20022_parser's
+                        # per-message-family hardcoded extraction, which
+                        # (a) misses fields it was never taught about
+                        # (postal address, purpose code, ...) and (b)
+                        # flattens everything into MT-tag keys, losing the
+                        # real XML structure "Generate MD" is supposed to
+                        # describe (see extract_xml_source_fields's own
+                        # docstring for the full rationale).
+                        result = iso20022_parser.parse(file_path)
+                        from app.api.routes.transform_mapping import extract_xml_source_fields
+                        xml_fields = extract_xml_source_fields(file_path)
+                        columns = [{'name': k, 'display_name': k, 'type': 'string', 'sample_value': v}
+                                   for k, v in xml_fields.items()]
+                        mt_blocks = {
+                            'block4': {
+                                'raw': '\n'.join(f'{k}={v}' for k, v in xml_fields.items()),
+                                'sub_fields': {k: {'value': v, 'field_tag': k} for k, v in xml_fields.items()}
+                            }
+                        }
+                        return {"file_type": "XML_ISO20022", "columns": columns, "sample_data": [xml_fields], "total_rows": 1, "mt_info": {"mt_type": result["mt_type"], "iso_target": result["iso_target"], "iso_source": result.get("iso_source"), "mt_blocks": mt_blocks}}
+                except Exception as e:
+                    pass
             # ── NOUVEAU : détecter XML MT avant parse standard ─────────────────
             if file_type == "XML":
                 try:

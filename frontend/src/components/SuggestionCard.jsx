@@ -2,13 +2,28 @@ import { useState } from 'react';
 import axios from 'axios';
 import { ArrowRight, AlertCircle } from 'lucide-react';
 
-const SuggestionCard = ({ columnName, suggestions, analysisResult }) => {
+const SuggestionCard = ({ columnName, suggestions, analysisResult, onAccepted }) => {
   const [editMode, setEditMode] = useState(false);
   const [editedValues, setEditedValues] = useState(null);
   const [currentSuggestion, setCurrentSuggestion] = useState(suggestions[0]);
   const [showFullFormula, setShowFullFormula] = useState(false); // ── NOUVEAU ──
   const [showConditions, setShowConditions] = useState(false);
   const [showComplianceDetails, setShowComplianceDetails] = useState(false);
+
+  // ── Display label only: strip "blockN." prefix for any MT block field ─────
+  // columnName itself is left completely untouched everywhere else (API
+  // calls, source_path, record-decision, etc.) — this is purely cosmetic.
+  const getDisplayLabel = (name) => {
+    if (!name) return name;
+    const match = name.match(/^block\d+\.(.+)$/);
+    if (!match) return name;
+    const sub = match[1];
+    if (sub.startsWith(':')) {
+      return sub.endsWith(':') ? sub : `${sub}:`;
+    }
+    return sub;
+  };
+  const displayName = getDisplayLabel(columnName);
 
   // ── Helpers mapping_formula (objet ou string) ─────────────────────────────
   const getMFPseudocode = (mf) => {
@@ -27,7 +42,7 @@ const SuggestionCard = ({ columnName, suggestions, analysisResult }) => {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h3 style={{ color: 'white', margin: 0, fontSize: '1.1rem', fontFamily: 'monospace' }}>
-              {columnName}
+              {displayName}
             </h3>
             <p style={{ color: '#a0a0a0', margin: '0.5rem 0 0 0', fontSize: '0.9rem' }}>
               <AlertCircle size={16} style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} />
@@ -49,7 +64,11 @@ const SuggestionCard = ({ columnName, suggestions, analysisResult }) => {
   };
 
   const sourceBadge = getSourceBadge(currentSuggestion.suggestion_source);
-  const confidence = currentSuggestion.confidence || 50;
+  // `|| 50` treated a genuine 0 (the "not_applicable" envelope-field case
+  // from files.py, sent deliberately as confidence: 0.0) as falsy and
+  // silently replaced it with a fake 50% — making an explicit "this field
+  // has no ISO 20022 mapping" marker look like a real, middling guess.
+  const confidence = currentSuggestion.confidence ?? 50;
 
   // ── NOUVEAU : vérifie si enrichissement Qdrant disponible ──────────────────
   const ragMF = currentSuggestion.mapping_formula;
@@ -58,13 +77,21 @@ const SuggestionCard = ({ columnName, suggestions, analysisResult }) => {
   const ragGlobalVars = getMFGlobalVars(ragMF);
   const ragConditions = getMFConditions(ragMF);
 
+  // suggestion_source !== 'ai' guard: an LLM-generated suggestion (see
+  // ai_learning_service._suggest_via_llm) also fills mapping_formula (its
+  // own short expression, e.g. "trim(value)") so ragPseudocode alone
+  // would be truthy for it too — without this, a pure LLM guess falsely
+  // displayed the "RAG Enriched" badge, since that field is the only
+  // thing an LLM-sourced suggestion and a real RAG match have in common.
   const hasRagEnrichment = !!(
-    currentSuggestion.audit_requirement ||
-    currentSuggestion.compliance_requirement ||
-    currentSuggestion.data_privacy ||
-    currentSuggestion.migration_note ||
-    currentSuggestion.caching_strategy ||
-    ragPseudocode
+    currentSuggestion.suggestion_source !== 'ai' && (
+      currentSuggestion.audit_requirement ||
+      currentSuggestion.compliance_requirement ||
+      currentSuggestion.data_privacy ||
+      currentSuggestion.migration_note ||
+      currentSuggestion.caching_strategy ||
+      ragPseudocode
+    )
   );
   // ── FIN NOUVEAU ────────────────────────────────────────────────────────────
 
@@ -89,23 +116,49 @@ const SuggestionCard = ({ columnName, suggestions, analysisResult }) => {
     try {
       const suggestion = suggestionToUse || currentSuggestion;
       const sourceLevel = columnName.split('.').length;
-      const targetLevel = suggestion.target_path ? suggestion.target_path.split('.').length : 1;
 
-      await axios.post('http://localhost:8000/api/mapping-formulas/', {
-        message_description_id: analysisResult.id,
-        name: `${columnName} → ${suggestion.element_name}`,
-        source_path: columnName,
-        target_path: suggestion.target_path || suggestion.element_name,
-        source_level: sourceLevel,
-        target_level: targetLevel,
-        transformation_type: 'direct',
-        transformation_rule: `Auto-suggested (${confidence}% confidence)`,
-        example_input: null,
-        example_output: null
-      });
+      // Use the REAL pseudocode/expression from the RAG-enriched suggestion
+      // when available, instead of a generic confidence-only placeholder.
+      // This is what Generate Elements (Priority 1: accepted MappingFormula)
+      // actually surfaces as the field's expression — saving a placeholder
+      // here meant every accepted formula showed "Auto-suggested (X%
+      // confidence)" instead of its real transformation logic downstream.
+      const mf = suggestion.mapping_formula;
+      const realPseudocode = getMFPseudocode(mf);
+      const realExpression = getMFExpression(mf);
+      const formulaText = realPseudocode || realExpression
+        || `Auto-suggested (${confidence}% confidence)`;
+
+      // A single source field can drive several ISO 20022 targets from one
+      // shared formula (e.g. :50K: -> Dbtr.Nm AND DbtrAcct.Id.IBAN).
+      // additional_targets carries the extras the RAG lookup found beyond
+      // the primary target_path — create one MappingFormula per target so
+      // Generate Elements doesn't silently drop them.
+      const allTargetPaths = [
+        suggestion.target_path || suggestion.element_name,
+        ...(suggestion.additional_targets || []).map(t => t.target_path).filter(Boolean)
+      ];
+
+      for (const targetPath of allTargetPaths) {
+        const targetLevel = targetPath ? targetPath.split('.').length : 1;
+        await axios.post('http://localhost:8000/api/mapping-formulas/', {
+          message_description_id: analysisResult.id,
+          name: `${columnName} → ${suggestion.element_name}`,
+          source_path: columnName,
+          target_path: targetPath,
+          source_level: sourceLevel,
+          target_level: targetLevel,
+          transformation_type: 'direct',
+          transformation_rule: formulaText,
+          example_input: null,
+          example_output: null
+        });
+      }
 
       await handleRecordDecision('accept', null);
-      alert(`✅ Mapping created: ${columnName} → ${suggestion.element_name}`);
+      alert(`✅ Mapping created: ${columnName} → ${suggestion.element_name}`
+        + (allTargetPaths.length > 1 ? ` (${allTargetPaths.length} targets)` : ''));
+      onAccepted?.();
     } catch (error) {
       console.error('Error creating mapping:', error);
       alert(error.response?.data?.detail?.[0]?.msg || 'Failed to create mapping');
@@ -231,7 +284,7 @@ const SuggestionCard = ({ columnName, suggestions, analysisResult }) => {
             borderRadius: '8px',
             fontSize: '0.9rem'
           }}>
-            {columnName}
+            {displayName}
           </span>
           <ArrowRight size={20} color="#667eea" />
 
@@ -713,7 +766,7 @@ const SuggestionCard = ({ columnName, suggestions, analysisResult }) => {
               Source
             </div>
             <div style={{ fontSize: '15px', color: '#e5e7eb', fontWeight: '500' }}>
-              {columnName}
+              {displayName}
             </div>
           </div>
 

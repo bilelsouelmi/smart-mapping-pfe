@@ -38,6 +38,12 @@ dist/
 backend/uploads/*
 !backend/uploads/.gitkeep
 
+# Generated transform outputs / scratch pipeline dirs
+backend/outputs/*
+!backend/outputs/.gitkeep
+backend/pipeline_test_in/
+backend/pipeline_test_out/
+
 # Database
 *.db
 *.sqlite3

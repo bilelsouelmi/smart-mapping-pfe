@@ -1,0 +1,1105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MessageMapping version="1.0">
+
+  <!-- ============================================= -->
+  <!-- GENERAL INFORMATION -->
+  <!-- ============================================= -->
+  <GeneralInformation>
+    <MappingId>MAP_MT900_CAMT054_001</MappingId>
+    <MappingName>MT900 to camt.054 Conversion</MappingName>
+    <Version>2.1.0</Version>
+    <CreatedDate>2026-05-17</CreatedDate>
+    <CreatedBy>Bilel SOUELMI - Vermeg FinTech Team</CreatedBy>
+    <LastModifiedDate>2026-07-15</LastModifiedDate>
+    <Status>ACTIVE</Status>
+    <StandardReference>Bank of America Reference Guide — Credit and Debit Notification (CAMT.054) — CBPR+ ISO 20022</StandardReference>
+
+    <BusinessContext>
+      <Description>
+        Converts SWIFT MT900 (Confirmation of Debit) to ISO 20022 camt.054.001.08
+        (BankToCustomerDebitCreditNotification). MT900 is sent by a financial institution
+        to confirm to another financial institution that a debit has been made to the
+        sender's account. The camt.054 replaces both MT900 (debit) and MT910 (credit).
+        For MT900: Ntry/CdtDbtInd = DBIT and Ntry/NtryDtls/TxDtls/CdtDbtInd = DBIT.
+        Per SWIFT CBPR+ roadmap: MT900/MT910 migrate to camt.054 by November 2028.
+        Per Bank of America official reference guide: three mandatory new fields are
+        introduced in camt.054 with no MT900 equivalent: NtryRef, Sts, and BkTxCd —
+        all set to fixed values NOTPROVIDED/BOOK/NOTPROVIDED respectively.
+      </Description>
+      <UseCases>
+        <UseCase>Interbank debit confirmation after funds transfer</UseCase>
+        <UseCase>Nostro account debit notification to account owner</UseCase>
+        <UseCase>Settlement confirmation for correspondent banking debits</UseCase>
+        <UseCase>Exception handling and audit trail for debit transactions</UseCase>
+        <UseCase>Reconciliation of debit entries in treasury management systems</UseCase>
+        <UseCase>Confirmation of cover debit for MT202COV payments</UseCase>
+      </UseCases>
+      <ApplicableDomains>Correspondent Banking, Treasury Operations, Nostro Reconciliation, Interbank Settlement, Cash Management, Payments Hub</ApplicableDomains>
+    </BusinessContext>
+
+    <TechnicalSpecifications>
+      <SourceFormat>SWIFT MT900 (ISO 15022 — Category 9 Cash Management)</SourceFormat>
+      <TargetFormat>ISO 20022 camt.054.001.08 (XML)</TargetFormat>
+      <ProcessingMode>REAL_TIME</ProcessingMode>
+      <AverageProcessingTime>30ms per notification</AverageProcessingTime>
+      <MaxProcessingTime>300ms</MaxProcessingTime>
+      <ThroughputCapacity>10000 notifications/second</ThroughputCapacity>
+      <AmountPrecision>FractionDigits=5, TotalDigits=18 per ISO 20022 schema</AmountPrecision>
+      <KeyDifference>
+        MT900 carries only debit notifications. camt.054 handles both debit and credit.
+        CdtDbtInd = DBIT at BOTH entry level AND transaction details level (two paths).
+        Three new mandatory fields introduced in camt.054 not present in MT900:
+        NtryRef (fixed=NOTPROVIDED), Sts/Cd (fixed=BOOK), BkTxCd (fixed=NOTPROVIDED).
+        Field :21: maps to InstrId (not EndToEndId) per official BoA reference guide.
+        Field :32A: maps to FOUR camt.054 paths: Ntry/Amt, Ntry/ValDt/Dt,
+        TxDtls/Amt, and TxDtls/RltdDts/IntrBkSttlmDt.
+      </KeyDifference>
+    </TechnicalSpecifications>
+
+    <ComplianceRequirements>
+      <Regulation>SWIFT Standards MT900 Usage Guidelines (Category 9)</Regulation>
+      <Regulation>ISO 20022 camt.054.001.08 Implementation Guidelines (CBPR+)</Regulation>
+      <Regulation>SWIFT CBPR+ Migration Roadmap — November 2028 for advices</Regulation>
+      <Regulation>CGI-MP BankToCustomerDebitCreditNotification Implementation Guidelines</Regulation>
+      <Regulation>Bank of America Reference Guide — Credit and Debit Notification (CAMT.054)</Regulation>
+      <Regulation>GDPR — Financial Institution Data Protection (Regulation EU 2016/679)</Regulation>
+      <Regulation>Basel III Intraday Liquidity Monitoring (BCBS 248)</Regulation>
+    </ComplianceRequirements>
+
+    <GlobalVariables>
+      <Variable name="MAX_MSG_ID_LENGTH" value="35" type="INTEGER" description="Maximum length of camt.054 MsgId per ISO 20022 Max35Text"/>
+      <Variable name="MAX_REF_LENGTH" value="16" type="INTEGER" description="Maximum length of MT900 field :20: per SWIFT Category 9"/>
+      <Variable name="MAX_RELATED_REF_LENGTH" value="16" type="INTEGER" description="Maximum length of MT900 field :21:"/>
+      <Variable name="NOTIFICATION_MSG_SUFFIX" value="-CAMT054-" type="STRING" description="Suffix appended to field :20: when building camt.054 MsgId"/>
+      <Variable name="CREDIT_DEBIT_INDICATOR" value="DBIT" type="STRING" description="Fixed DBIT for all MT900 — set at BOTH Ntry/CdtDbtInd AND TxDtls/CdtDbtInd"/>
+      <Variable name="ENTRY_STATUS" value="BOOK" type="STRING" description="Fixed BOOK — mandatory new camt.054 field Ntry/Sts/Cd"/>
+      <Variable name="ENTRY_REF_FIXED" value="NOTPROVIDED" type="STRING" description="Fixed NOTPROVIDED — mandatory new camt.054 field Ntry/NtryRef"/>
+      <Variable name="BANK_TX_CODE_FIXED" value="NOTPROVIDED" type="STRING" description="Fixed NOTPROVIDED — mandatory new camt.054 field Ntry/BkTxCd/Prtry/Cd and Issr"/>
+      <Variable name="AMOUNT_FRACTION_DIGITS" value="5" type="INTEGER" description="ISO 20022 camt.054 amount fraction digits per schema"/>
+      <Variable name="AMOUNT_TOTAL_DIGITS" value="18" type="INTEGER" description="ISO 20022 camt.054 amount total digits per schema"/>
+      <Variable name="CENTURY_CUTOFF_YEAR" value="50" type="INTEGER" description="2-digit year cutoff for YYMMDD to YYYY-MM-DD date conversion"/>
+      <Variable name="AUDIT_RETENTION_YEARS" value="7" type="INTEGER" description="Regulatory minimum audit log retention period"/>
+      <Variable name="PROCESSING_TIMEZONE" value="UTC" type="STRING" description="All timestamps in UTC per CBPR+ guidelines"/>
+      <Variable name="DUPLICATE_DETECTION_WINDOW_HOURS" value="24" type="INTEGER" description="Hours for duplicate MT900 detection"/>
+      <Variable name="IBAN_PATTERN" value="^[A-Z]{2}\d{2}[A-Z0-9]+$" type="STRING" description="IBAN detection regex for field :25:"/>
+      <Variable name="LARGE_DEBIT_THRESHOLD" value="1000000" type="DECIMAL" description="Debit amount above this triggers treasury alert"/>
+    </GlobalVariables>
+  </GeneralInformation>
+
+  <!-- ============================================= -->
+  <!-- SOURCE MESSAGE STRUCTURE (MT900) -->
+  <!-- ============================================= -->
+  <SourceMessage>
+    <MessageType>MT900</MessageType>
+    <MessageName>Confirmation of Debit</MessageName>
+    <Standard>SWIFT ISO 15022 — Category 9 (Cash Management and Customer Status)</Standard>
+    <MessagePurpose>
+      Sent by an account servicing institution to the account owner or authorised party
+      to confirm that a debit entry has been posted to the account. Typically generated
+      after processing an outgoing MT103 or MT202. The debit-side counterpart to MT910.
+      Both are replaced by camt.054 in ISO 20022 — distinguished by CdtDbtInd value.
+    </MessagePurpose>
+
+    <Fields>
+
+      <Field id="FIELD_01">
+        <FieldTag>:20:</FieldTag>
+        <FieldName>Transaction Reference Number</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>16</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Format>16x</Format>
+        <Description>
+          Unique reference assigned by the sender to identify the MT900 message.
+          Per BoA reference guide section 1: maps to both GrpHdr/MsgId and Ntfctn/Id.
+          Must be unique per sender BIC per calendar day. SWIFT Character Set X.
+          Must not start or end with slash. Must not contain double slash.
+        </Description>
+        <ExampleValue>DBT20260506001</ExampleValue>
+        <ValidationRules>
+          <Rule>Unique per sender BIC per calendar day</Rule>
+          <Rule>Maximum 16 characters — SWIFT Character Set X</Rule>
+          <Rule>Must not start or end with / (T26 error code)</Rule>
+          <Rule>Must not contain // within reference (T26 error code)</Rule>
+        </ValidationRules>
+        <ElementId>MSG_REF</ElementId>
+        <TargetPath>GrpHdr/MsgId AND Ntfctn/Id</TargetPath>
+      </Field>
+
+      <Field id="FIELD_02">
+        <FieldTag>:21:</FieldTag>
+        <FieldName>Related Reference</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>16</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Format>16x</Format>
+        <Description>
+          Reference of the original transaction that caused the debit.
+          Per BoA reference guide section 2: maps to Ntfctn/Ntry/NtryDtls/TxDtls/Refs/InstrId
+          (NOT EndToEndId — InstrId is the correct ISO 20022 path for this field).
+          Per BoA example: :21:12314115931671 → InstrId AND EndToEndId both populated.
+          Use NONREF if no related reference is available.
+        </Description>
+        <ExampleValue>TRXREF20260506001</ExampleValue>
+        <ValidationRules>
+          <Rule>Must reference field :20: of the originating transaction</Rule>
+          <Rule>Maximum 16 characters — SWIFT Character Set X</Rule>
+          <Rule>Must not start or end with slash</Rule>
+          <Rule>Use NONREF if no related reference available</Rule>
+        </ValidationRules>
+        <ElementId>RELATED_REF</ElementId>
+        <TargetPath>Ntfctn/Ntry/NtryDtls/TxDtls/Refs/InstrId AND Refs/EndToEndId</TargetPath>
+      </Field>
+
+      <Field id="FIELD_03">
+        <FieldTag>:25:</FieldTag>
+        <FieldName>Account Identification</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>35</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Format>35x</Format>
+        <Description>
+          Identification of the debited account.
+          Per BoA reference guide section 3: maps to Ntfctn/Acct/Id (IBAN or Othr)
+          AND Ntfctn/Acct/Ccy (currency derived from field :32A:).
+          Option P (25P) maps to Ntfctn/Acct/Ownr/Id/OrgId/AnyBIC — only used
+          when the receiver of the message is not the account owner.
+        </Description>
+        <ExampleValue>TN987654321</ExampleValue>
+        <ValidationRules>
+          <Rule>Must identify the debited account at the sending institution</Rule>
+          <Rule>Maximum 35 characters</Rule>
+          <Rule>If IBAN format detected, validate modulo-97 checksum per ISO 13616</Rule>
+          <Rule>25P (BIC option) only when receiver is not account owner</Rule>
+        </ValidationRules>
+        <ElementId>ACCT_ID</ElementId>
+        <TargetPath>Ntfctn/Acct/Id/IBAN or Ntfctn/Acct/Id/Othr/Id AND Ntfctn/Acct/Ccy</TargetPath>
+      </Field>
+
+      <Field id="FIELD_04">
+        <FieldTag>:13D:</FieldTag>
+        <FieldName>Date/Time Indication</FieldName>
+        <DataType>COMPOSITE</DataType>
+        <MaxLength>18</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Format>6!n4!n1!x4!n</Format>
+        <Description>
+          Date and time of entry posting with UTC offset.
+          Per BoA reference guide section 4: maps to Ntfctn/Ntry/BookgDt/DtTm.
+          Format: YYMMDD + HHMM + sign + HHMM offset.
+          Only present when booking date differs from value date.
+          If status is BOOK, booking date is mandatory per CBPR+ guidelines.
+          GrpHdr/CreDtTm is always mandatory (system generated at conversion time).
+        </Description>
+        <ExampleValue>2605061430+0200</ExampleValue>
+        <Components>
+          <Component name="Date" type="DATE" format="6!n" description="Date YYMMDD"/>
+          <Component name="Time" type="STRING" format="4!n" description="Time HHMM"/>
+          <Component name="Sign" type="STRING" format="1!x" description="UTC offset sign + or -"/>
+          <Component name="UTCOffset" type="STRING" format="4!n" description="UTC offset HHMM"/>
+        </Components>
+        <ValidationRules>
+          <Rule>Optional — not always present in MT900</Rule>
+          <Rule>If present: date must be valid YYMMDD, time valid HHMM</Rule>
+          <Rule>UTC offset range: -1200 to +1400</Rule>
+          <Rule>When absent and status=BOOK, booking date derived from value date</Rule>
+        </ValidationRules>
+        <ElementId>ENTRY_DATETIME</ElementId>
+        <TargetPath>Ntfctn/Ntry/BookgDt/DtTm</TargetPath>
+      </Field>
+
+      <Field id="FIELD_05">
+        <FieldTag>:32A:</FieldTag>
+        <FieldName>Value Date, Currency Code, Amount</FieldName>
+        <DataType>COMPOSITE</DataType>
+        <Mandatory>true</Mandatory>
+        <Format>6!n3!a15d</Format>
+        <Description>
+          Value date, currency and amount of the debit entry.
+          Per BoA reference guide section 6: maps to FOUR camt.054 paths:
+          (1) Ntfctn/Ntry/Amt — entry amount with Ccy attribute
+          (2) Ntfctn/Ntry/Amt/@Ccy — currency attribute
+          (3) Ntfctn/Ntry/NtryDtls/TxDtls/Amt — transaction amount (same value)
+          (4) Ntfctn/Ntry/NtryDtls/TxDtls/RltdDts/IntrBkSttlmDt — interbank settlement date
+          Also used to derive: Ntfctn/Ntry/ValDt/Dt (value date) and Ntfctn/Acct/Ccy.
+          Amount precision: FractionDigits=5, TotalDigits=18 per ISO 20022 schema.
+          SWIFT convention: comma decimal separator → ISO 20022: dot decimal separator.
+        </Description>
+        <ExampleValue>260506EUR25000,</ExampleValue>
+        <Components>
+          <Component name="Date" type="DATE" format="6!n" mandatory="true" description="Value date YYMMDD — effective date of debit"/>
+          <Component name="Currency" type="STRING" format="3!a" mandatory="true" description="ISO 4217 three-letter currency code"/>
+          <Component name="Amount" type="DECIMAL" format="15d" mandatory="true" description="Debit amount — comma decimal separator (SWIFT convention)"/>
+        </Components>
+        <ValidationRules>
+          <Rule>Date must be valid YYMMDD calendar date</Rule>
+          <Rule>Currency must be valid ISO 4217 alpha-3 code</Rule>
+          <Rule>Amount must be positive — sign conveyed by CdtDbtInd = DBIT</Rule>
+          <Rule>Decimal separator must be comma in MT900 (converted to dot in camt.054)</Rule>
+          <Rule>Amount fraction digits: up to 5 decimal places per ISO 20022 schema</Rule>
+          <Rule>Amount total digits: up to 18 per ISO 20022 schema</Rule>
+        </ValidationRules>
+        <ElementId>VALUE_AMT</ElementId>
+        <TargetPath>Ntry/Amt + Ntry/Amt/@Ccy + Ntry/ValDt/Dt + TxDtls/Amt + TxDtls/RltdDts/IntrBkSttlmDt</TargetPath>
+      </Field>
+
+      <Field id="FIELD_06">
+        <FieldTag>:52A:</FieldTag>
+        <FieldName>Ordering Institution</FieldName>
+        <DataType>BIC</DataType>
+        <MaxLength>35</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Format>[[/1!a][/34x]]CRLF4!a2!a2!c[3!c]</Format>
+        <Description>
+          BIC of the financial institution that originated the transaction causing this debit.
+          Per BoA reference guide section 8: maps to
+          Ntfctn/Ntry/NtryDtls/TxDtls/RltdAgts/DbtrAgt/FinInstnId/BICFI.
+          Optional — not always present in MT900.
+        </Description>
+        <ExampleValue>BNPAFRPPXXX</ExampleValue>
+        <ValidationRules>
+          <Rule>Valid BIC format (8 or 11 chars) if present</Rule>
+          <Rule>BIC must exist in SWIFT BIC Directory</Rule>
+          <Rule>Subject to institutional sanctions screening</Rule>
+        </ValidationRules>
+        <ElementId>ORDERING_INST</ElementId>
+        <TargetPath>Ntfctn/Ntry/NtryDtls/TxDtls/RltdAgts/DbtrAgt/FinInstnId/BICFI</TargetPath>
+      </Field>
+
+      <Field id="FIELD_07">
+        <FieldTag>:72:</FieldTag>
+        <FieldName>Sender to Receiver Information</FieldName>
+        <DataType>TEXT</DataType>
+        <MaxLength>210</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Format>6*35x</Format>
+        <Description>
+          Additional information from sender to receiver.
+          Per BoA reference guide section 10: maps to
+          Ntfctn/Ntry/NtryDtls/TxDtls/AddtlTxInf (Max500Text).
+          May contain structured codes (/EREF/, /REMI/, etc.) or free text.
+          Per BoA example: :72:/SETTIME/12595235 →
+          AddtlTxInf = "/SETTIME/12595235"
+          Full content preserved without parsing into separate elements.
+        </Description>
+        <ExampleValue>/EREF/TRXREF20260506001/REMI/Payment debit confirmation</ExampleValue>
+        <ValidationRules>
+          <Rule>Optional — not always present</Rule>
+          <Rule>Maximum 6 lines of 35 characters (210 total)</Rule>
+          <Rule>Content preserved as-is in AddtlTxInf (Max500Text)</Rule>
+          <Rule>AML screening per bank policy</Rule>
+        </ValidationRules>
+        <ElementId>SNDR_RCVR_INFO</ElementId>
+        <TargetPath>Ntfctn/Ntry/NtryDtls/TxDtls/AddtlTxInf</TargetPath>
+      </Field>
+
+    </Fields>
+  </SourceMessage>
+
+  <!-- ============================================= -->
+  <!-- TARGET MESSAGE STRUCTURE (camt.054) -->
+  <!-- ============================================= -->
+  <TargetMessage>
+    <MessageType>camt.054.001.08</MessageType>
+    <MessageName>BankToCustomerDebitCreditNotification</MessageName>
+    <Standard>ISO 20022</Standard>
+    <Schema>camt.054.001.08.xsd</Schema>
+    <Namespace>urn:iso:std:iso:20022:tech:xsd:camt.054.001.08</Namespace>
+    <CGI_MP_Compliance>CGI-MP BankToCustomerDebitCreditNotification Guidelines v4.0</CGI_MP_Compliance>
+    <MT900_Specific_Note>
+      MT900-derived camt.054 always has:
+      - Ntry/CdtDbtInd = DBIT
+      - Ntry/NtryDtls/TxDtls/CdtDbtInd = DBIT (BOTH levels mandatory)
+      - Ntry/NtryRef = "NOTPROVIDED" (mandatory new field, fixed value)
+      - Ntry/Sts/Cd = BOOK (mandatory new field, fixed value)
+      - Ntry/BkTxCd/Prtry/Cd = "NOTPROVIDED" (mandatory new field, fixed value)
+      - Ntry/BkTxCd/Prtry/Issr = "NOTPROVIDED" (mandatory new field, fixed value)
+    </MT900_Specific_Note>
+
+    <Fields>
+
+      <Field id="FIELD_01">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/GrpHdr/MsgId</XPath>
+        <FieldName>Message Identification</FieldName>
+        <DataType>STRING</DataType>
+        <MinLength>1</MinLength>
+        <MaxLength>35</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Format>Max35Text</Format>
+        <Description>
+          Point-to-point reference for the camt.054 message.
+          Per BoA guide section 1: derived from MT900 field :20:.
+          The account servicing institution must ensure uniqueness per account owner.
+        </Description>
+        <ExampleValue>DBT20260506001</ExampleValue>
+        <SourceMT>:20:</SourceMT>
+      </Field>
+
+      <Field id="FIELD_02">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/GrpHdr/CreDtTm</XPath>
+        <FieldName>Creation Date Time</FieldName>
+        <DataType>DATETIME</DataType>
+        <Mandatory>true</Mandatory>
+        <Format>ISODateTime</Format>
+        <Description>
+          Date and time of camt.054 message creation.
+          Per BoA guide format key table: always mandatory in camt.054 GrpHdr.
+          No equivalent in MT900 — system generated at conversion time in UTC.
+        </Description>
+        <ExampleValue>2026-05-06T14:30:22Z</ExampleValue>
+        <SourceMT>SYSTEM_GENERATED</SourceMT>
+      </Field>
+
+      <Field id="FIELD_03">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Id</XPath>
+        <FieldName>Notification Identification</FieldName>
+        <DataType>STRING</DataType>
+        <MinLength>1</MinLength>
+        <MaxLength>35</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Format>Max35Text</Format>
+        <Description>
+          Unique notification identifier.
+          Per BoA guide section 1: also mapped from MT900 field :20:.
+          Set equal to GrpHdr/MsgId for MT900 single-notification messages.
+        </Description>
+        <ExampleValue>DBT20260506001</ExampleValue>
+        <SourceMT>:20:</SourceMT>
+      </Field>
+
+      <Field id="FIELD_04">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Acct/Id</XPath>
+        <FieldName>Account Identification</FieldName>
+        <DataType>STRUCTURED</DataType>
+        <Mandatory>true</Mandatory>
+        <Format>IBAN or Othr/Id</Format>
+        <Description>
+          Debited account identification.
+          Per BoA guide section 3: IBAN or Othr/Id from MT900 field :25:.
+          If IBAN detected and valid → Acct/Id/IBAN.
+          Otherwise → Acct/Id/Othr/Id.
+        </Description>
+        <ExampleValue>ABC123456789XXX → Othr/Id</ExampleValue>
+        <SourceMT>:25:</SourceMT>
+      </Field>
+
+      <Field id="FIELD_05">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Acct/Ccy</XPath>
+        <FieldName>Account Currency</FieldName>
+        <DataType>STRING</DataType>
+        <Length>3</Length>
+        <Mandatory>false</Mandatory>
+        <Format>ActiveOrHistoricCurrencyCode</Format>
+        <Description>
+          Currency of the debited account.
+          Per BoA guide section 3: derived from currency component of MT900 field :32A:.
+          New element in camt.054 with no direct MT900 account-level equivalent.
+        </Description>
+        <ExampleValue>EUR</ExampleValue>
+        <SourceMT>:32A: (currency component)</SourceMT>
+      </Field>
+
+      <Field id="FIELD_06">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/NtryRef</XPath>
+        <FieldName>Entry Reference</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Format>Max35Text</Format>
+        <Description>
+          Mandatory new field in camt.054 with no MT900 equivalent.
+          Per BoA guide format key table row 12: fixed value = "NOTPROVIDED".
+          Always set to "NOTPROVIDED" for MT900-derived messages.
+        </Description>
+        <ExampleValue>NOTPROVIDED</ExampleValue>
+        <FixedValue>NOTPROVIDED</FixedValue>
+        <SourceMT>NEW_FIELD — no MT900 equivalent</SourceMT>
+      </Field>
+
+      <Field id="FIELD_07">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/Amt</XPath>
+        <FieldName>Entry Amount</FieldName>
+        <DataType>AMOUNT</DataType>
+        <Mandatory>true</Mandatory>
+        <Format>ActiveOrHistoricCurrencyAndAmount</Format>
+        <AmountFractionDigits>5</AmountFractionDigits>
+        <AmountTotalDigits>18</AmountTotalDigits>
+        <Description>
+          Absolute debit amount with ISO 4217 currency as Ccy attribute.
+          Per BoA guide section 6: converted from MT900 field :32A: amount component.
+          SWIFT comma decimal → ISO dot decimal. Amount always positive.
+          Fraction digits: 5, Total digits: 18 per ISO 20022 schema.
+        </Description>
+        <ExampleValue Ccy="EUR">25000.00000</ExampleValue>
+        <SourceMT>:32A: (amount + currency components)</SourceMT>
+      </Field>
+
+      <Field id="FIELD_08">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/CdtDbtInd</XPath>
+        <FieldName>Credit Debit Indicator (Entry Level)</FieldName>
+        <DataType>CODE</DataType>
+        <Mandatory>true</Mandatory>
+        <Format>CreditDebitCode</Format>
+        <Description>
+          Credit/debit indicator at entry level.
+          Per BoA guide section 5: derived from message type in block2.
+          MT900 → DBIT. MT910 → CRDT.
+          Also set at TxDtls level (FIELD_13) — BOTH levels are mandatory per BoA guide.
+        </Description>
+        <ExampleValue>DBIT</ExampleValue>
+        <FixedValue>DBIT</FixedValue>
+        <SourceMT>block2 message type (900=DBIT)</SourceMT>
+      </Field>
+
+      <Field id="FIELD_09">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/Sts/Cd</XPath>
+        <FieldName>Entry Status</FieldName>
+        <DataType>CODE</DataType>
+        <Mandatory>true</Mandatory>
+        <Format>EntryStatus1Code</Format>
+        <Description>
+          Mandatory new field in camt.054 with no MT900 equivalent.
+          Per BoA guide format key table row 13: fixed value = BOOK.
+          MT900 confirms a completed booked debit — always BOOK.
+        </Description>
+        <ExampleValue>BOOK</ExampleValue>
+        <FixedValue>BOOK</FixedValue>
+        <SourceMT>NEW_FIELD — no MT900 equivalent</SourceMT>
+      </Field>
+
+      <Field id="FIELD_10">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/BookgDt/DtTm</XPath>
+        <FieldName>Booking Date Time</FieldName>
+        <DataType>DATETIME</DataType>
+        <Mandatory>false</Mandatory>
+        <Format>ISODateTime</Format>
+        <Description>
+          Date and time of entry booking.
+          Per BoA guide section 4: mapped from MT900 field :13D: when present.
+          Per CBPR+ guidelines: if status=BOOK and :13D: absent, derive from value date.
+          Format: YYYY-MM-DDTHH:MM:SS+HH:MM (with UTC offset per :13D: sign/offset).
+        </Description>
+        <ExampleValue>2026-05-06T14:30:00+02:00</ExampleValue>
+        <SourceMT>:13D: (optional)</SourceMT>
+      </Field>
+
+      <Field id="FIELD_11">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/ValDt/Dt</XPath>
+        <FieldName>Value Date</FieldName>
+        <DataType>DATE</DataType>
+        <Mandatory>true</Mandatory>
+        <Format>ISODate (YYYY-MM-DD)</Format>
+        <Description>
+          Value date of the debit entry.
+          Per BoA guide section 6: converted from date component of MT900 field :32A:.
+          YYMMDD → YYYY-MM-DD using CENTURY_CUTOFF_YEAR.
+        </Description>
+        <ExampleValue>2026-05-06</ExampleValue>
+        <SourceMT>:32A: (date component)</SourceMT>
+      </Field>
+
+      <Field id="FIELD_12">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/BkTxCd/Prtry/Cd</XPath>
+        <FieldName>Bank Transaction Code</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Format>Max35Text</Format>
+        <Description>
+          Mandatory new field in camt.054 with no MT900 equivalent.
+          Per BoA guide format key table row 14: fixed value = "NOTPROVIDED".
+          Also requires BkTxCd/Prtry/Issr = "NOTPROVIDED".
+        </Description>
+        <ExampleValue>NOTPROVIDED</ExampleValue>
+        <FixedValue>NOTPROVIDED</FixedValue>
+        <SourceMT>NEW_FIELD — no MT900 equivalent</SourceMT>
+      </Field>
+
+      <Field id="FIELD_13">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/NtryDtls/TxDtls/Refs/InstrId</XPath>
+        <FieldName>Instruction Identification</FieldName>
+        <DataType>STRING</DataType>
+        <MinLength>1</MinLength>
+        <MaxLength>35</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Format>Max35Text</Format>
+        <Description>
+          Instruction identification for the transaction.
+          Per BoA guide section 2: mapped from MT900 field :21: (Related Reference).
+          Maps to InstrId (NOT EndToEndId — InstrId is the correct path per BoA standard).
+          Also set as EndToEndId per BoA example XML showing both elements populated.
+        </Description>
+        <ExampleValue>TRXREF20260506001</ExampleValue>
+        <SourceMT>:21:</SourceMT>
+      </Field>
+
+      <Field id="FIELD_14">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/NtryDtls/TxDtls/Amt</XPath>
+        <FieldName>Transaction Amount</FieldName>
+        <DataType>AMOUNT</DataType>
+        <Mandatory>true</Mandatory>
+        <Format>ActiveOrHistoricCurrencyAndAmount</Format>
+        <AmountFractionDigits>5</AmountFractionDigits>
+        <AmountTotalDigits>18</AmountTotalDigits>
+        <Description>
+          Transaction-level amount — same value as Ntry/Amt.
+          Per BoA guide section 6: :32A: maps to BOTH Ntry/Amt AND TxDtls/Amt.
+          Both must be populated with the same amount and currency.
+        </Description>
+        <ExampleValue Ccy="EUR">25000.00000</ExampleValue>
+        <SourceMT>:32A: (same as Ntry/Amt)</SourceMT>
+      </Field>
+
+      <Field id="FIELD_15">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/NtryDtls/TxDtls/CdtDbtInd</XPath>
+        <FieldName>Credit Debit Indicator (Transaction Level)</FieldName>
+        <DataType>CODE</DataType>
+        <Mandatory>true</Mandatory>
+        <Format>CreditDebitCode</Format>
+        <Description>
+          Credit/debit indicator at transaction details level.
+          Per BoA guide section 5: CdtDbtInd appears at BOTH Ntry level AND TxDtls level.
+          Both must be set to DBIT for MT900-derived messages.
+          Both must be set to CRDT for MT910-derived messages.
+        </Description>
+        <ExampleValue>DBIT</ExampleValue>
+        <FixedValue>DBIT</FixedValue>
+        <SourceMT>block2 message type (same as Ntry/CdtDbtInd)</SourceMT>
+      </Field>
+
+      <Field id="FIELD_16">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/NtryDtls/TxDtls/RltdDts/IntrBkSttlmDt</XPath>
+        <FieldName>Interbank Settlement Date</FieldName>
+        <DataType>DATE</DataType>
+        <Mandatory>false</Mandatory>
+        <Format>ISODate (YYYY-MM-DD)</Format>
+        <Description>
+          Interbank settlement date — date funds were settled between institutions.
+          Per BoA guide section 6: :32A: date also maps to TxDtls/RltdDts/IntrBkSttlmDt.
+          Same value as Ntry/ValDt/Dt — the :32A: date component populates both paths.
+        </Description>
+        <ExampleValue>2026-05-06</ExampleValue>
+        <SourceMT>:32A: (date component — same as ValDt/Dt)</SourceMT>
+      </Field>
+
+      <Field id="FIELD_17">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/NtryDtls/TxDtls/RltdAgts/DbtrAgt/FinInstnId/BICFI</XPath>
+        <FieldName>Debtor Agent BIC</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>11</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Format>BICFIIdentifier</Format>
+        <Description>
+          BIC of the ordering institution.
+          Per BoA guide section 8: mapped from MT900 field :52A:.
+          Identifies the financial institution that originated the debit transaction.
+          Optional — only present when :52A: is provided in MT900.
+        </Description>
+        <ExampleValue>BNPAFRPPXXX</ExampleValue>
+        <SourceMT>:52A: (optional)</SourceMT>
+      </Field>
+
+      <Field id="FIELD_18">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/NtryDtls/TxDtls/AddtlTxInf</XPath>
+        <FieldName>Additional Transaction Information</FieldName>
+        <DataType>STRING</DataType>
+        <MinLength>1</MinLength>
+        <MaxLength>500</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Format>Max500Text</Format>
+        <Description>
+          Additional transaction information preserving full :72: content.
+          Per BoA guide section 10: :72: maps to AddtlTxInf (Max500Text).
+          Per BoA example: :72:/SETTIME/12595235 → AddtlTxInf = "/SETTIME/12595235"
+          Content preserved as-is — no parsing into sub-elements for MT900.
+        </Description>
+        <ExampleValue>/EREF/TRXREF20260506001/REMI/Payment debit confirmation</ExampleValue>
+        <SourceMT>:72: (optional)</SourceMT>
+      </Field>
+
+    </Fields>
+  </TargetMessage>
+
+  <!-- ============================================= -->
+  <!-- FIELD MAPPINGS -->
+  <!-- ============================================= -->
+  <!-- NOTE ON THIS REVISION (v2.1.0): PseudoCode blocks simplified to
+       short, executable formulas per supervisor review, using the
+       Ntfctn/Ntry/TxDtls structure specific to camt.054 (distinct from
+       Stmt structure used by camt.053 in the MT950/MT940 mappings, and
+       distinct from FIToFICstmrCdtTrf used by pacs.008 in MT103). Multi-
+       target mappings (one source field -> several target paths) keep
+       one formula line per target path, matching the TargetFields list. -->
+  <FieldMappings>
+
+    <!-- ==================== MAPPING 01 ==================== -->
+    <Mapping id="MAPPING_01">
+      <SourceField ref="FIELD_01"/>
+      <TargetFields>
+        <TargetField ref="FIELD_01"/>
+        <TargetField ref="FIELD_03"/>
+      </TargetFields>
+
+      <MappingFormula>
+        <Type>ONE_TO_TWO_DIRECT_COPY</Type>
+        <Expression>GrpHdr.MsgId = Ntfctn.Id = MT.F20.trim()</Expression>
+        <PseudoCode>
+          GrpHdr.MsgId = MT.F20.trim()
+          Ntfctn.Id = MT.F20.trim()
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_20 != null AND trim(source.field_20) != ""</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT "E001: Missing mandatory field :20:"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>LENGTH_CHECK</Type>
+          <Expression>length(source.field_20) &lt;= MAX_REF_LENGTH</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT "E002: Field :20: exceeds 16 characters"</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>SLASH_RULE</Type>
+          <Expression>NOT starts_with(field_20, "/") AND NOT ends_with(field_20, "/") AND NOT contains(field_20, "//")</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT "E003: Field :20: violates SWIFT slash rule T26"</ElseAction>
+        </Condition>
+        <Condition priority="4">
+          <Type>DUPLICATE_DETECTION</Type>
+          <Expression>NOT exists_duplicate(source.field_20, sender_bic, today, DUPLICATE_DETECTION_WINDOW_HOURS)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT "E004: Duplicate MT900 notification"</ElseAction>
+        </Condition>
+        <Condition priority="5">
+          <Type>MAX_LENGTH_FINAL</Type>
+          <Expression>length(source.field_20) &lt;= MAX_MSG_ID_LENGTH</Expression>
+          <Action>PROCEED — field :20: (16 chars max) always fits in Max35Text</Action>
+          <ElseAction>N/A — impossible given condition 2 already enforces 16 chars max</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="MAX_MSG_ID_LENGTH"/>
+        <Variable ref="MAX_REF_LENGTH"/>
+        <Variable ref="DUPLICATE_DETECTION_WINDOW_HOURS"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>Notification unidentifiable. Duplicate detection impossible. Schema validation fails — MsgId and Ntfctn/Id are mandatory in camt.054.</ImpactIfFails>
+        <BusinessRationale>Field :20: populates two camt.054 elements simultaneously: GrpHdr/MsgId (message-level identifier) and Ntfctn/Id (notification-level identifier). Per BoA guide: both are derived from the same MT900 reference value. The account servicing institution must ensure uniqueness per account owner for a pre-agreed period.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE — direct copy + cache lookup (~1ms)</PerformanceImpact>
+        <AuditRequirement>All notifications logged with field :20: reference, sender BIC, and conversion timestamp for AUDIT_RETENTION_YEARS years.</AuditRequirement>
+        <ComplianceRequirement>MsgId and Ntfctn/Id mandatory per camt.054 schema. Global uniqueness per CBPR+ guidelines.</ComplianceRequirement>
+        <DataPrivacy>Message ID is operational metadata. No customer PII.</DataPrivacy>
+        <MigrationNote>MT900 field :20: maximum 16 characters fits within camt.054 Max35Text (35 chars). No truncation needed. Both MsgId and Ntfctn/Id receive the same value per BoA reference guide — unlike MT950 where MsgId gets a timestamp suffix.</MigrationNote>
+        <CachingStrategy>Processed references cached in Redis for DUPLICATE_DETECTION_WINDOW_HOURS for duplicate detection.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 02 ==================== -->
+    <Mapping id="MAPPING_02">
+      <SourceField ref="NONE"/>
+      <TargetField ref="FIELD_02"/>
+
+      <MappingFormula>
+        <Type>SYSTEM_GENERATED_UTC_TIMESTAMP</Type>
+        <Expression>GrpHdr.CreDtTm = now("yyyy-MM-dd'T'HH:mm:ss'Z'")</Expression>
+        <PseudoCode>
+          GrpHdr.CreDtTm = now("yyyy-MM-dd'T'HH:mm:ss'Z'")
+        </PseudoCode>
+      </MappingFormula>
+
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Schema validation failure — GrpHdr/CreDtTm mandatory in camt.054.</ImpactIfFails>
+        <BusinessRationale>GrpHdr/CreDtTm is a mandatory camt.054 header field. No MT900 equivalent. Generated at conversion time in UTC per CBPR+ requirement.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <AuditRequirement>Conversion timestamp logged for SLA measurement.</AuditRequirement>
+        <ComplianceRequirement>Mandatory per camt.054 schema. UTC per CBPR+.</ComplianceRequirement>
+        <DataPrivacy>No PII — operational timestamp.</DataPrivacy>
+        <MigrationNote>MT900 has no creation timestamp. camt.054 requires it. Generated fresh at conversion time — never cached.</MigrationNote>
+        <CachingStrategy>Not applicable.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 03 ==================== -->
+    <Mapping id="MAPPING_03">
+      <SourceField ref="FIELD_03"/>
+      <TargetFields>
+        <TargetField ref="FIELD_04"/>
+        <TargetField ref="FIELD_05"/>
+      </TargetFields>
+
+      <MappingFormula>
+        <Type>IBAN_DETECTION_WITH_CURRENCY_DERIVATION</Type>
+        <Expression>if(isIBAN(MT.F25)) Ntfctn.Acct.Id.IBAN = MT.F25; else Ntfctn.Acct.Id.Othr.Id = MT.F25</Expression>
+        <PseudoCode>
+          if(isIBAN(MT.F25)) Ntfctn.Acct.Id.IBAN = MT.F25.trim()
+          if(!isIBAN(MT.F25)) Ntfctn.Acct.Id.Othr.Id = MT.F25.trim()
+          Ntfctn.Acct.Ccy = MT.F32A.currency
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_25 != null AND trim(source.field_25) != ""</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT "E005: Missing mandatory field :25:"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>AUTHORIZATION_CHECK</Type>
+          <Expression>account_authorized_for_recipient(account, recipient_bic)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT SECURITY "SEC001: Account not authorized for recipient"</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>CURRENCY_DERIVATION</Type>
+          <Expression>is_valid_iso4217(substring(source.field_32A, 7, 3))</Expression>
+          <Action>SET Acct/Ccy = currency from :32A:</Action>
+          <ElseAction>OMIT Acct/Ccy — optional field, do not reject</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="IBAN_PATTERN"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Notification for wrong account — reconciliation failure and unauthorized financial data disclosure. Security incident.</ImpactIfFails>
+        <BusinessRationale>Account identification is the primary key linking notification to the correct nostro ledger. Currency is derived from :32A: per BoA guide — no separate currency field in MT900. Both IBAN and proprietary formats supported.</BusinessRationale>
+        <PerformanceImpact>LOW — IBAN regex + modulo-97 + authorization lookup (~6ms)</PerformanceImpact>
+        <AuditRequirement>Account ID and authorization result logged per notification. Retention: AUDIT_RETENTION_YEARS years.</AuditRequirement>
+        <ComplianceRequirement>Account authorization per banking secrecy laws and GDPR Article 5. IBAN validation per ISO 13616.</ComplianceRequirement>
+        <DataPrivacy>Account number is financial confidential data. AES-256 at rest, TLS 1.3+ in transit.</DataPrivacy>
+        <MigrationNote>MT900 field :25: max 35 chars → camt.054 IBAN (34 chars max) or Othr/Id (35 chars max). Account currency derived from :32A: currency component — new camt.054 Acct/Ccy element with no direct MT900 equivalent at account level.</MigrationNote>
+        <CachingStrategy>Authorization cached per session. Invalidated on account change.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 04 ==================== -->
+    <Mapping id="MAPPING_04">
+      <SourceField ref="FIELD_05"/>
+      <TargetFields>
+        <TargetField ref="FIELD_07"/>
+        <TargetField ref="FIELD_08"/>
+        <TargetField ref="FIELD_11"/>
+        <TargetField ref="FIELD_14"/>
+        <TargetField ref="FIELD_15"/>
+        <TargetField ref="FIELD_16"/>
+      </TargetFields>
+
+      <MappingFormula>
+        <Type>COMPOSITE_FIELD_TO_SIX_TARGET_PATHS</Type>
+        <Expression>Ntry.Amt = TxDtls.Amt = decimal(MT.F32A.amount.replace(",","."))</Expression>
+        <PseudoCode>
+          Ntry.Amt = decimal(MT.F32A.amount.replace(",","."))
+          Ntry.CdtDbtInd = "DBIT"
+          Ntry.ValDt.Dt = expandCentury(MT.F32A.date, "yyMMdd", CENTURY_CUTOFF_YEAR)
+          TxDtls.Amt = decimal(MT.F32A.amount.replace(",","."))
+          TxDtls.CdtDbtInd = "DBIT"
+          TxDtls.RltdDts.IntrBkSttlmDt = expandCentury(MT.F32A.date, "yyMMdd", CENTURY_CUTOFF_YEAR)
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_32A != null AND trim(source.field_32A) != ""</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT "E008: Missing mandatory field :32A:"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>FORMAT_VALIDATION</Type>
+          <Expression>matches(source.field_32A, "^\d{6}[A-Z]{3}[\d,]+$")</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT "E009: Invalid :32A: format — expected 6!n3!a15d"</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>DATE_VALIDATION</Type>
+          <Expression>is_valid_calendar_date(yy, mm, dd)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT "E010: Invalid date in :32A:"</ElseAction>
+        </Condition>
+        <Condition priority="4">
+          <Type>CURRENCY_VALIDATION</Type>
+          <Expression>is_valid_iso4217(currency)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT "E011: Invalid currency in :32A:"</ElseAction>
+        </Condition>
+        <Condition priority="5">
+          <Type>AMOUNT_POSITIVE</Type>
+          <Expression>amount_value > 0</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT "E012: Non-positive amount in :32A:"</ElseAction>
+        </Condition>
+        <Condition priority="6">
+          <Type>LARGE_AMOUNT_ALERT</Type>
+          <Expression>amount_value &lt;= LARGE_DEBIT_THRESHOLD</Expression>
+          <Action>PROCEED normally</Action>
+          <ElseAction>ALERT treasury AND PROCEED — warning not rejection</ElseAction>
+        </Condition>
+        <Condition priority="7">
+          <Type>FIXED_DBIT_INDICATOR_AT_BOTH_LEVELS</Type>
+          <Expression>true</Expression>
+          <Action>SET Ntry/CdtDbtInd = "DBIT" AND TxDtls/CdtDbtInd = "DBIT" (both mandatory)</Action>
+          <ElseAction>N/A</ElseAction>
+        </Condition>
+        <Condition priority="8">
+          <Type>DUAL_DATE_PATHS</Type>
+          <Expression>true</Expression>
+          <Action>SET Ntry/ValDt/Dt = iso_date AND TxDtls/RltdDts/IntrBkSttlmDt = iso_date (same value)</Action>
+          <ElseAction>N/A</ElseAction>
+        </Condition>
+        <Condition priority="9">
+          <Type>DUAL_AMOUNT_PATHS</Type>
+          <Expression>true</Expression>
+          <Action>SET Ntry/Amt = amount AND TxDtls/Amt = amount (same value, both mandatory)</Action>
+          <ElseAction>N/A</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="CREDIT_DEBIT_INDICATOR"/>
+        <Variable ref="CENTURY_CUTOFF_YEAR"/>
+        <Variable ref="AMOUNT_FRACTION_DIGITS"/>
+        <Variable ref="AMOUNT_TOTAL_DIGITS"/>
+        <Variable ref="LARGE_DEBIT_THRESHOLD"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Complete notification failure — amount and value date are the core financial data. All six target paths must be populated correctly or camt.054 schema validation fails.</ImpactIfFails>
+        <BusinessRationale>
+          Field :32A: is the most data-rich single field in MT900 — it populates 6 distinct
+          camt.054 paths simultaneously per BoA reference guide:
+          (1+2) Ntry/Amt + Ccy — entry-level amount for statement matching
+          (3) Ntry/ValDt/Dt — value date for interest calculation
+          (4+5) TxDtls/Amt + Ccy — transaction-level amount for payment chain
+          (6) TxDtls/RltdDts/IntrBkSttlmDt — interbank settlement date for RTGS reporting
+          CdtDbtInd set at BOTH Ntry and TxDtls levels per BoA guide section 5.
+          Amount precision: FractionDigits=5, TotalDigits=18 per ISO 20022 schema.
+        </BusinessRationale>
+        <PerformanceImpact>LOW — all in-memory operations, sub-millisecond</PerformanceImpact>
+        <AuditRequirement>Amount, currency, date, and both CdtDbtInd values logged per notification. Large debit alerts logged separately. Retention: AUDIT_RETENTION_YEARS years.</AuditRequirement>
+        <ComplianceRequirement>Accurate debit reporting for Basel III LCR (BCBS 248). CdtDbtInd correctness critical — incorrect direction causes wrong-direction posting with regulatory implications. IntrBkSttlmDt required for RTGS settlement confirmation reporting.</ComplianceRequirement>
+        <DataPrivacy>Transaction amounts are financial confidential data. Restricted to authorized treasury systems.</DataPrivacy>
+        <MigrationNote>
+          CRITICAL CORRECTIONS vs previous version:
+          (1) DECIMAL: SWIFT comma (25000,50) → ISO dot (25000.50) — mandatory
+          (2) DATE: SWIFT YYMMDD → ISO YYYY-MM-DD using century cutoff
+          (3) DUAL CdtDbtInd: must be set at BOTH Ntry/CdtDbtInd AND TxDtls/CdtDbtInd
+          (4) DUAL AMOUNT: must populate BOTH Ntry/Amt AND TxDtls/Amt
+          (5) DUAL DATE: ValDt/Dt AND IntrBkSttlmDt both receive the :32A: date
+          (6) PRECISION: FractionDigits=5, TotalDigits=18 (not 2 decimal places)
+        </MigrationNote>
+        <CachingStrategy>No caching — parsed fresh from each MT900.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 05 ==================== -->
+    <Mapping id="MAPPING_05">
+      <SourceField ref="FIELD_02"/>
+      <TargetField ref="FIELD_13"/>
+
+      <MappingFormula>
+        <Type>DIRECT_COPY_TO_INSTR_ID_AND_END_TO_END</Type>
+        <Expression>Refs.InstrId = Refs.EndToEndId = (MT.F21 == "NONREF") ? "NOTPROVIDED" : MT.F21.trim()</Expression>
+        <PseudoCode>
+          ref = (MT.F21 == "NONREF") ? "NOTPROVIDED" : MT.F21.trim()
+          Refs.InstrId = ref
+          Refs.EndToEndId = ref
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_21 != null AND trim(source.field_21) != ""</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT "E013: Missing mandatory field :21:"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>NONREF_HANDLING</Type>
+          <Expression>source.field_21 != "NONREF"</Expression>
+          <Action>USE as InstrId and EndToEndId</Action>
+          <ElseAction>USE "NOTPROVIDED" per ISO 20022 convention</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>DUAL_PATH_POPULATION</Type>
+          <Expression>true</Expression>
+          <Action>SET InstrId = value AND EndToEndId = value (both per BoA example XML)</Action>
+          <ElseAction>N/A</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>Automated reconciliation impossible — cannot match debit notification to original payment. Manual intervention required.</ImpactIfFails>
+        <BusinessRationale>
+          Per BoA guide section 2: field :21: maps to InstrId (not EndToEndId as erroneously
+          mapped in earlier version). Per BoA example XML: both InstrId AND EndToEndId are
+          populated with the same value from field :21:. This dual population ensures
+          compatibility with receivers that use either reference element for reconciliation.
+        </BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE — direct string copy</PerformanceImpact>
+        <AuditRequirement>Related reference logged per notification for transaction lifecycle audit trail.</AuditRequirement>
+        <ComplianceRequirement>Transaction traceability per FATF Travel Rule and correspondent banking AML obligations.</ComplianceRequirement>
+        <DataPrivacy>Payment reference is operational data — not personal data per GDPR.</DataPrivacy>
+        <MigrationNote>
+          CORRECTION from earlier version: :21: maps to InstrId (not EndToEndId alone).
+          Per BoA official guide section 2 XPath: Refs/InstrId.
+          Per BoA example XML: both InstrId and EndToEndId populated with same value.
+          NONREF → NOTPROVIDED per ISO 20022 convention.
+        </MigrationNote>
+        <CachingStrategy>Not applicable.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 06 ==================== -->
+    <Mapping id="MAPPING_06">
+      <SourceField ref="NONE"/>
+      <TargetFields>
+        <TargetField ref="FIELD_06"/>
+        <TargetField ref="FIELD_09"/>
+        <TargetField ref="FIELD_12"/>
+      </TargetFields>
+
+      <MappingFormula>
+        <Type>FIXED_VALUE_MANDATORY_NEW_FIELDS</Type>
+        <Expression>Ntry.NtryRef = "NOTPROVIDED"; Ntry.Sts.Cd = "BOOK"; Ntry.BkTxCd.Prtry.Cd/Issr = "NOTPROVIDED"</Expression>
+        <PseudoCode>
+          Ntry.NtryRef = "NOTPROVIDED"
+          Ntry.Sts.Cd = "BOOK"
+          Ntry.BkTxCd.Prtry.Cd = "NOTPROVIDED"
+          Ntry.BkTxCd.Prtry.Issr = "NOTPROVIDED"
+        </PseudoCode>
+      </MappingFormula>
+
+      <Conditions>
+        <Condition priority="1">
+          <Type>ALWAYS_EXECUTE</Type>
+          <Expression>true</Expression>
+          <Action>SET all three fixed-value mandatory new fields for every MT900-derived camt.054</Action>
+          <ElseAction>N/A — always executes</ElseAction>
+        </Condition>
+      </Conditions>
+
+      <GlobalVariables>
+        <Variable ref="ENTRY_REF_FIXED"/>
+        <Variable ref="ENTRY_STATUS"/>
+        <Variable ref="BANK_TX_CODE_FIXED"/>
+      </GlobalVariables>
+
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>camt.054 schema validation failure — NtryRef, Sts, and BkTxCd are mandatory elements. Receiving systems that validate against camt.054 XSD will reject the message entirely.</ImpactIfFails>
+        <BusinessRationale>
+          Three new mandatory fields in camt.054 with no MT900 equivalent.
+          Per BoA reference guide format key table rows 12, 13, 14:
+          Row 12: NtryRef = "NOTPROVIDED" (mandatory, fixed)
+          Row 13: Sts/Cd = BOOK (mandatory, fixed — MT900 confirms booked entries only)
+          Row 14: BkTxCd = "NOTPROVIDED" (mandatory, fixed — no SWIFT transaction code in MT900)
+          These three fields are schema-required in camt.054 and must always be populated.
+          Without them, the generated XML will fail XSD validation at receiving institutions.
+        </BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE — literal value assignment</PerformanceImpact>
+        <AuditRequirement>Fixed values logged as part of standard camt.054 generation audit.</AuditRequirement>
+        <ComplianceRequirement>camt.054.001.08 XSD requires these three elements. CBPR+ mandates schema-valid messages. Receiving institutions reject schema-invalid messages per SWIFT network rules.</ComplianceRequirement>
+        <DataPrivacy>Fixed operational values. No PII.</DataPrivacy>
+        <MigrationNote>
+          NEW in corrected version — these fields were missing from the previous mapping.
+          NtryRef: identifies the entry in the account servicing institution's books — "NOTPROVIDED" used when not available from MT900 source.
+          Sts/Cd = BOOK: confirmed from MT900 semantics — this message type only sent after booking is complete.
+          BkTxCd: identifies the type of transaction per ISO 20022 external code set — "NOTPROVIDED" used when MT900 carries no transaction type code.
+          Per BoA example XML: BkTxCd uses Prtry (proprietary) sub-element with both Cd and Issr = "NOTPROVIDED".
+        </MigrationNote>
+        <CachingStrategy>Not applicable — literal fixed values.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 07 ==================== -->
+    <Mapping id="MAPPING_07">
+      <SourceField ref="FIELD_06"/>
+      <TargetField ref="FIELD_17"/>
+
+      <MappingFormula>
+        <Type>BIC_EXTRACTION</Type>
+        <Expression>if(MT.F52A) DbtrAgt.FinInstnId.BICFI = extractBIC(MT.F52A)</Expression>
+        <PseudoCode>
+          if(MT.F52A) DbtrAgt.FinInstnId.BICFI = extractBIC(MT.F52A)
+        </PseudoCode>
+      </MappingFormula>
+
+      <General>
+        <Criticality>LOW</Criticality>
+        <ImpactIfFails>Ordering institution missing from camt.054 — payment chain incomplete but notification still delivered.</ImpactIfFails>
+        <BusinessRationale>Per BoA guide section 8: :52A: maps to DbtrAgt/FinInstnId/BICFI. Optional — present only when included in MT900. Enables full payment chain traceability.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <AuditRequirement>Ordering institution BIC logged when present.</AuditRequirement>
+        <ComplianceRequirement>Institutional sanctions screening if BIC present. FATF correspondent banking requirements.</ComplianceRequirement>
+        <DataPrivacy>BIC is public identifier. No PII.</DataPrivacy>
+        <MigrationNote>:52A: optional in MT900. When present: maps to DbtrAgt BICFI via extractBIC() helper (strips optional /account prefix line). Option D (name/address) not supported in this mapping — option A (BIC) is standard for interbank MT900.</MigrationNote>
+        <CachingStrategy>Not applicable.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 08 ==================== -->
+    <Mapping id="MAPPING_08">
+      <SourceField ref="FIELD_07"/>
+      <TargetField ref="FIELD_18"/>
+
+      <MappingFormula>
+        <Type>DIRECT_PRESERVATION_TO_ADDTL_TX_INF</Type>
+        <Expression>if(MT.F72) AddtlTxInf = MT.F72.truncate(500)</Expression>
+        <PseudoCode>
+          if(MT.F72) AddtlTxInf = MT.F72.truncate(500)
+        </PseudoCode>
+      </MappingFormula>
+
+      <General>
+        <Criticality>LOW</Criticality>
+        <ImpactIfFails>Loss of supplemental information — notification still delivered. Supplemental reconciliation data unavailable to receiver.</ImpactIfFails>
+        <BusinessRationale>Per BoA guide section 10: :72: maps directly to AddtlTxInf (Max500Text). Content preserved as-is per BoA example: :72:/SETTIME/12595235 → AddtlTxInf = "/SETTIME/12595235". No parsing into sub-elements — full content preservation is the standard per BoA guide.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE — direct string copy with length check</PerformanceImpact>
+        <AuditRequirement>Full :72: content preserved in camt.054 for audit completeness.</AuditRequirement>
+        <ComplianceRequirement>AML content screening per bank policy. Max500Text constraint per camt.054 schema — MT900 :72: max 210 chars always fits.</ComplianceRequirement>
+        <DataPrivacy>May contain payment narrative with PII references. Apply same protections as payment data.</DataPrivacy>
+        <MigrationNote>CORRECTION: previous version mapped :72: to RmtInf/Ustrd. Correct per BoA guide: AddtlTxInf (Max500Text). MT900 :72: max 210 chars — always within 500 char limit. No structured code parsing — full content goes to AddtlTxInf as-is.</MigrationNote>
+        <CachingStrategy>Not applicable.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 09 ==================== -->
+    <Mapping id="MAPPING_09">
+      <SourceField ref="FIELD_04"/>
+      <TargetField ref="FIELD_10"/>
+
+      <MappingFormula>
+        <Type>DATETIME_WITH_OFFSET_CONVERSION</Type>
+        <Expression>if(MT.F13D) BookgDt.DtTm = parseDateTimeOffset(MT.F13D, CENTURY_CUTOFF_YEAR)</Expression>
+        <PseudoCode>
+          if(MT.F13D) BookgDt.DtTm = parseDateTimeOffset(MT.F13D, CENTURY_CUTOFF_YEAR)
+        </PseudoCode>
+      </MappingFormula>
+
+      <General>
+        <Criticality>LOW</Criticality>
+        <ImpactIfFails>Booking timestamp absent from camt.054. Optional field — notification still valid. Impact: intraday liquidity monitoring less precise.</ImpactIfFails>
+        <BusinessRationale>Per BoA guide section 4: :13D: maps to BookgDt/DtTm. Per CBPR+ guidelines: if status=BOOK and :13D: absent, booking date may be derived from value date. Optional in MT900 — not all sending institutions include it.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <AuditRequirement>Booking timestamp logged when present for precise timing audit.</AuditRequirement>
+        <ComplianceRequirement>Per BoA guide: if status is BOOK, booking date is mandatory when available. When :13D: absent, BookgDt may be omitted or set equal to ValDt.</ComplianceRequirement>
+        <DataPrivacy>Operational timestamp. No PII.</DataPrivacy>
+        <MigrationNote>parseDateTimeOffset() handles :13D: format: YYMMDD + HHMM + sign + HHMM → ISO: YYYY-MM-DDTHH:MM:SS±HH:MM. Per BoA example: :13D:1302091701-0600 → 2013-02-09T17:00:00+02:00 (note offset sign inversion in example). Applies CENTURY_CUTOFF_YEAR for date conversion.</MigrationNote>
+        <CachingStrategy>Not applicable.</CachingStrategy>
+      </General>
+    </Mapping>
+
+  </FieldMappings>
+
+</MessageMapping>

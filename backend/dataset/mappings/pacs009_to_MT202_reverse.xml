@@ -1,0 +1,462 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MessageMapping version="1.0">
+
+  <!-- ============================================= -->
+  <!-- GENERAL INFORMATION -->
+  <!-- ============================================= -->
+  <GeneralInformation>
+    <MappingId>MAP_PACS009_MT202_REVERSE_001</MappingId>
+    <MappingName>pacs.009 to MT202 Conversion (XML -&gt; MT direction)</MappingName>
+    <Version>1.0.0</Version>
+    <CreatedDate>2026-07-18</CreatedDate>
+    <CreatedBy>Claude - XML-&gt;MT engine, message pair 2/6</CreatedBy>
+    <LastModifiedDate>2026-07-18</LastModifiedDate>
+    <Status>ACTIVE</Status>
+
+    <!-- NOTE ON DIRECTION: same convention as pacs008_to_MT103_reverse.xml —
+         SourceMessage/TargetMessage declared as MT202/pacs.009.001.08 (NOT
+         swapped) because ai_learning_service always passes mt_type="MT202",
+         iso_target="pacs.009.001.08" for this pair regardless of upload
+         direction, and lookup_iso_to_mt_all() filters on exactly that pair
+         without itself swapping which side is which. The actual reversal
+         is entirely in what SourceField/TargetField *content* means:
+         SourceField.FieldTag is an XML path (from the uploaded pacs.009
+         file, using its FICdtTrf/CdtTrfTxInf root — distinct from pacs.008's
+         FIToFICstmrCdtTrf), and TargetField.XPath is a bare "F&lt;tag&gt;" key
+         that _transform_xml_to_mt_with_mapping converts back to the real
+         SWIFT tag via mt_generator.
+    -->
+
+    <BusinessContext>
+      <Description>
+        XML -&gt; MT direction counterpart to MT202_to_pacs009.xml. Converts an
+        ISO 20022 pacs.009.001.08 FinancialInstitutionCreditTransfer message
+        back into SWIFT MT202 text.
+      </Description>
+      <UseCases>
+        <UseCase>Converting a pacs.009 interbank settlement received from an
+          ISO 20022-native system into legacy SWIFT MT202 for onward
+          transmission</UseCase>
+      </UseCases>
+      <ApplicableDomains>Correspondent Banking, Treasury Operations, RTGS Settlement</ApplicableDomains>
+    </BusinessContext>
+
+    <TechnicalSpecifications>
+      <SourceFormat>ISO 20022 pacs.009.001.08 (XML)</SourceFormat>
+      <TargetFormat>SWIFT MT202 (ISO 15022)</TargetFormat>
+      <ProcessingMode>REAL_TIME</ProcessingMode>
+    </TechnicalSpecifications>
+  </GeneralInformation>
+
+  <!-- ============================================= -->
+  <!-- SOURCE MESSAGE STRUCTURE (pacs.009 XML paths) -->
+  <!-- ============================================= -->
+  <SourceMessage>
+    <MessageType>MT202</MessageType>
+    <MessageName>pacs.009 field, as an XML path</MessageName>
+    <Standard>SWIFT ISO 15022</Standard>
+
+    <Fields>
+      <Field id="FIELD_01">
+        <FieldTag>CdtTrfTxInf.PmtId.EndToEndId</FieldTag>
+        <FieldName>End to End Identification</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Source for MT202 field :20: (this message's own reference)</Description>
+        <ExampleValue>FIT20260427001</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_02">
+        <FieldTag>GrpHdr.MsgId</FieldTag>
+        <FieldName>Message Identification</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Source for MT202 field :21: (related reference)</Description>
+        <ExampleValue>REF20260427ABC</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_03">
+        <FieldTag>CdtTrfTxInf.IntrBkSttlmDt</FieldTag>
+        <FieldName>Interbank Settlement Date</FieldName>
+        <DataType>DATE</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Combines with Amt/InstdAmt to build MT202 field :32A:</Description>
+        <ExampleValue>2026-04-27</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_04">
+        <FieldTag>CdtTrfTxInf.InstgAgt.FinInstnId.BICFI</FieldTag>
+        <FieldName>Instructing Agent BIC</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Source for MT202 field :52A: (Ordering Institution)</Description>
+        <ExampleValue>BIATTNTT</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_05">
+        <FieldTag>CdtTrfTxInf.IntrmyAgt1.FinInstnId.BICFI</FieldTag>
+        <FieldName>Intermediary Agent 1 BIC</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Source for MT202 field :56A: (Intermediary Institution)</Description>
+        <ExampleValue>BNPAFRPP</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_06">
+        <FieldTag>CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI</FieldTag>
+        <FieldName>Creditor Agent BIC</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Source for MT202 field :57A: (Account With Institution)</Description>
+        <ExampleValue>DEUTDEDB</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_07">
+        <FieldTag>CdtTrfTxInf.Cdtr.FinInstnId.BICFI</FieldTag>
+        <FieldName>Creditor BIC</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Source for MT202 field :58A: (Beneficiary Institution)</Description>
+        <ExampleValue>BARCGB22</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_08">
+        <FieldTag>CdtTrfTxInf.InstrForCdtrAgt.InstrInf</FieldTag>
+        <FieldName>Instruction for Creditor Agent</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Source for MT202 field :72: (Sender to Receiver Information)</Description>
+        <ExampleValue>/BNF/Cover payment for MT103 TRF20260427001</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_09">
+        <FieldTag>CdtTrfTxInf.PrvsInstgAgt1.FinInstnId.BICFI</FieldTag>
+        <FieldName>Previous Instructing Agent 1 BIC</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Source for MT202 field :53A: (Sender's Correspondent)</Description>
+        <ExampleValue>CORRUSXXX</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_10">
+        <FieldTag>CdtTrfTxInf.InstdAgt.FinInstnId.BICFI</FieldTag>
+        <FieldName>Instructed Agent BIC</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Source for MT202 field :54A: (Receiver's Correspondent)</Description>
+        <ExampleValue>INTLDEFFXXX</ExampleValue>
+      </Field>
+
+      <!-- Amount+currency: same shared-input pattern as pacs008_to_MT103_reverse's
+           IntrBkSttlmAmt — consumed by FIELD_03's F32A formula below, no
+           standalone target needed. -->
+      <Field id="FIELD_11">
+        <FieldTag>CdtTrfTxInf.Amt.InstdAmt</FieldTag>
+        <FieldName>Instructed Amount</FieldName>
+        <DataType>AMOUNT</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Combines with IntrBkSttlmDt to build MT202 field :32A:</Description>
+        <ExampleValue>500000.00</ExampleValue>
+      </Field>
+    </Fields>
+  </SourceMessage>
+
+  <!-- ============================================= -->
+  <!-- TARGET MESSAGE STRUCTURE (MT202 field tags) -->
+  <!-- ============================================= -->
+  <TargetMessage>
+    <MessageType>pacs.009.001.08</MessageType>
+    <MessageName>MT202 field, as a bare F-tag key</MessageName>
+    <Standard>ISO 20022</Standard>
+
+    <Fields>
+      <Field id="TARGET_01">
+        <XPath>F20</XPath>
+        <FieldName>Transaction Reference Number</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>SWIFT MT202 field :20:</Description>
+      </Field>
+
+      <Field id="TARGET_02">
+        <XPath>F21</XPath>
+        <FieldName>Related Reference</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>SWIFT MT202 field :21:</Description>
+      </Field>
+
+      <Field id="TARGET_03">
+        <XPath>F32A</XPath>
+        <FieldName>Value Date/Currency/Amount</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>SWIFT MT202 field :32A: (composite: YYMMDD + CCY + amount)</Description>
+      </Field>
+
+      <Field id="TARGET_04">
+        <XPath>F52A</XPath>
+        <FieldName>Ordering Institution</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>SWIFT MT202 field :52A:</Description>
+      </Field>
+
+      <Field id="TARGET_05">
+        <XPath>F56A</XPath>
+        <FieldName>Intermediary Institution</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>SWIFT MT202 field :56A:</Description>
+      </Field>
+
+      <Field id="TARGET_06">
+        <XPath>F57A</XPath>
+        <FieldName>Account With Institution</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>SWIFT MT202 field :57A:</Description>
+      </Field>
+
+      <Field id="TARGET_07">
+        <XPath>F58A</XPath>
+        <FieldName>Beneficiary Institution</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>SWIFT MT202 field :58A:</Description>
+      </Field>
+
+      <Field id="TARGET_08">
+        <XPath>F72</XPath>
+        <FieldName>Sender to Receiver Information</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>SWIFT MT202 field :72:</Description>
+      </Field>
+
+      <Field id="TARGET_09">
+        <XPath>F53A</XPath>
+        <FieldName>Sender's Correspondent</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>SWIFT MT202 field :53A:</Description>
+      </Field>
+
+      <Field id="TARGET_10">
+        <XPath>F54A</XPath>
+        <FieldName>Receiver's Correspondent</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>SWIFT MT202 field :54A:</Description>
+      </Field>
+    </Fields>
+  </TargetMessage>
+
+  <!-- ============================================= -->
+  <!-- FIELD MAPPINGS -->
+  <!-- ============================================= -->
+  <FieldMappings>
+
+    <!-- ==================== MAPPING 01 ==================== -->
+    <Mapping id="MAPPING_01">
+      <SourceField ref="FIELD_01"/>
+      <TargetField ref="TARGET_01"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F20 = XML.CdtTrfTxInf.PmtId.EndToEndId.truncate(16)</Expression>
+        <PseudoCode>
+          F20 = XML.CdtTrfTxInf.PmtId.EndToEndId.truncate(16)
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>MT202 message has no transaction reference — mandatory field.</ImpactIfFails>
+        <BusinessRationale>Reverse of the forward direction's F20 -&gt; EndToEndId mapping.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Direct copy, no transformation needed.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 02 ==================== -->
+    <Mapping id="MAPPING_02">
+      <SourceField ref="FIELD_02"/>
+      <TargetField ref="TARGET_02"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F21 = XML.GrpHdr.MsgId.truncate(16)</Expression>
+        <PseudoCode>
+          F21 = XML.GrpHdr.MsgId.truncate(16)
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>Cover payment linkage to the underlying MT103 lost — mandatory field.</ImpactIfFails>
+        <BusinessRationale>Reverse of the forward direction's F21 -&gt; GrpHdr.MsgId mapping (the forward mapping also copies F21 into PmtId.TxId, but GrpHdr.MsgId carries the same original value and is the more reliable single source for the reverse).</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Direct copy, no transformation needed.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 03 ==================== -->
+    <Mapping id="MAPPING_03">
+      <SourceField ref="FIELD_03"/>
+      <TargetField ref="TARGET_03"/>
+      <MappingFormula>
+        <Type>COMPOSITE_BUILD</Type>
+        <Expression>F32A = isoDateToSwift(XML.CdtTrfTxInf.IntrBkSttlmDt) + XML.CdtTrfTxInf.Amt.InstdAmt.@Ccy + toSwiftAmount(XML.CdtTrfTxInf.Amt.InstdAmt)</Expression>
+        <PseudoCode>
+          F32A = isoDateToSwift(XML.CdtTrfTxInf.IntrBkSttlmDt) + XML.CdtTrfTxInf.Amt.InstdAmt.@Ccy + toSwiftAmount(XML.CdtTrfTxInf.Amt.InstdAmt)
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Settlement date, currency and amount are all lost — MT202 unusable without :32A:.</ImpactIfFails>
+        <BusinessRationale>Rebuilds SWIFT's composite value-date+currency+amount field from the three separate ISO 20022 elements.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (string formatting only)</PerformanceImpact>
+        <MigrationNote>isoDateToSwift() converts YYYY-MM-DD -&gt; YYMMDD; toSwiftAmount() converts decimal '.' to SWIFT comma notation.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 04 ==================== -->
+    <Mapping id="MAPPING_04">
+      <SourceField ref="FIELD_04"/>
+      <TargetField ref="TARGET_04"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F52A = XML.CdtTrfTxInf.InstgAgt.FinInstnId.BICFI</Expression>
+        <PseudoCode>
+          F52A = XML.CdtTrfTxInf.InstgAgt.FinInstnId.BICFI
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Ordering institution missing — mandatory MT202 field.</ImpactIfFails>
+        <BusinessRationale>Direct BIC passthrough from the instructing agent.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Direct copy, no transformation needed.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 05 ==================== -->
+    <Mapping id="MAPPING_05">
+      <SourceField ref="FIELD_05"/>
+      <TargetField ref="TARGET_05"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F56A = XML.CdtTrfTxInf.IntrmyAgt1.FinInstnId.BICFI</Expression>
+        <PseudoCode>
+          F56A = XML.CdtTrfTxInf.IntrmyAgt1.FinInstnId.BICFI
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Intermediary routing chain broken — optional field, message still valid.</ImpactIfFails>
+        <BusinessRationale>Direct BIC passthrough from the intermediary agent.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Direct copy, no transformation needed.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 06 ==================== -->
+    <Mapping id="MAPPING_06">
+      <SourceField ref="FIELD_06"/>
+      <TargetField ref="TARGET_06"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F57A = XML.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI</Expression>
+        <PseudoCode>
+          F57A = XML.CdtTrfTxInf.CdtrAgt.FinInstnId.BICFI
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Account With Institution missing — optional field, message still valid.</ImpactIfFails>
+        <BusinessRationale>Direct BIC passthrough from the creditor agent.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Direct copy, no transformation needed.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 07 ==================== -->
+    <Mapping id="MAPPING_07">
+      <SourceField ref="FIELD_07"/>
+      <TargetField ref="TARGET_07"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F58A = XML.CdtTrfTxInf.Cdtr.FinInstnId.BICFI</Expression>
+        <PseudoCode>
+          F58A = XML.CdtTrfTxInf.Cdtr.FinInstnId.BICFI
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Beneficiary institution missing — mandatory MT202 field, payment cannot reach destination.</ImpactIfFails>
+        <BusinessRationale>Direct BIC passthrough from the creditor (final beneficiary institution).</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Direct copy, no transformation needed.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 08 ==================== -->
+    <Mapping id="MAPPING_08">
+      <SourceField ref="FIELD_08"/>
+      <TargetField ref="TARGET_08"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F72 = XML.CdtTrfTxInf.InstrForCdtrAgt.InstrInf</Expression>
+        <PseudoCode>
+          F72 = XML.CdtTrfTxInf.InstrForCdtrAgt.InstrInf
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>LOW</Criticality>
+        <ImpactIfFails>Cover payment reference/instructions lost — optional field.</ImpactIfFails>
+        <BusinessRationale>Direct text passthrough.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Direct copy, no transformation needed.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 09 ==================== -->
+    <Mapping id="MAPPING_09">
+      <SourceField ref="FIELD_09"/>
+      <TargetField ref="TARGET_09"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F53A = XML.CdtTrfTxInf.PrvsInstgAgt1.FinInstnId.BICFI</Expression>
+        <PseudoCode>
+          F53A = XML.CdtTrfTxInf.PrvsInstgAgt1.FinInstnId.BICFI
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Correspondent banking chain incomplete on the sending side — optional field.</ImpactIfFails>
+        <BusinessRationale>Direct BIC passthrough from the sender's correspondent.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Direct copy, no transformation needed.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 10 ==================== -->
+    <Mapping id="MAPPING_10">
+      <SourceField ref="FIELD_10"/>
+      <TargetField ref="TARGET_10"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F54A = XML.CdtTrfTxInf.InstdAgt.FinInstnId.BICFI</Expression>
+        <PseudoCode>
+          F54A = XML.CdtTrfTxInf.InstdAgt.FinInstnId.BICFI
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Correspondent banking chain incomplete on the receiving side — optional field.</ImpactIfFails>
+        <BusinessRationale>Direct BIC passthrough from the receiver's correspondent.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Direct copy, no transformation needed.</MigrationNote>
+      </General>
+    </Mapping>
+
+  </FieldMappings>
+
+</MessageMapping>

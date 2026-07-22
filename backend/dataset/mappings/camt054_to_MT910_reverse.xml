@@ -1,0 +1,400 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MessageMapping version="1.0">
+
+  <!-- ============================================= -->
+  <!-- GENERAL INFORMATION -->
+  <!-- ============================================= -->
+  <GeneralInformation>
+    <MappingId>MAP_CAMT054_MT910_REVERSE_001</MappingId>
+    <MappingName>camt.054 to MT910 Conversion (XML -&gt; MT direction)</MappingName>
+    <Version>1.0.0</Version>
+    <CreatedDate>2026-07-18</CreatedDate>
+    <CreatedBy>Claude - XML-&gt;MT engine, message pair 3/6</CreatedBy>
+    <LastModifiedDate>2026-07-18</LastModifiedDate>
+    <Status>ACTIVE</Status>
+
+    <!-- NOTE ON DIRECTION: same convention as camt054_to_MT900_reverse.xml
+         (see that file's comment for the full rationale) — declared as
+         MT910/camt.054.001.08, matching a camt.054 file that
+         iso20022_parser disambiguated as MT910 (via Ntry/CdtDbtInd ==
+         CRDT). Mirrors camt054_to_MT900_reverse.xml's core 6 fields plus
+         the two MT910-specific additions (:50K:/:56A:), matching the
+         forward MT910_to_camt054.xml's own enrichment.
+    -->
+
+    <BusinessContext>
+      <Description>
+        XML -&gt; MT direction counterpart to MT910_to_camt054.xml. Converts an
+        ISO 20022 camt.054.001.08 BankToCustomerDebitCreditNotification
+        (credit side, CdtDbtInd=CRDT) back into SWIFT MT910 text.
+      </Description>
+      <UseCases>
+        <UseCase>Converting a camt.054 credit notification received from an
+          ISO 20022-native system into legacy SWIFT MT910 for onward
+          transmission</UseCase>
+      </UseCases>
+      <ApplicableDomains>Correspondent Banking, Nostro Reconciliation, Cash Management</ApplicableDomains>
+    </BusinessContext>
+
+    <TechnicalSpecifications>
+      <SourceFormat>ISO 20022 camt.054.001.08 (XML)</SourceFormat>
+      <TargetFormat>SWIFT MT910 (ISO 15022)</TargetFormat>
+      <ProcessingMode>REAL_TIME</ProcessingMode>
+    </TechnicalSpecifications>
+  </GeneralInformation>
+
+  <!-- ============================================= -->
+  <!-- SOURCE MESSAGE STRUCTURE (camt.054 XML paths) -->
+  <!-- ============================================= -->
+  <SourceMessage>
+    <MessageType>MT910</MessageType>
+    <MessageName>camt.054 field, as an XML path</MessageName>
+    <Standard>SWIFT ISO 15022</Standard>
+
+    <Fields>
+      <Field id="FIELD_01">
+        <FieldTag>Ntfctn.Id</FieldTag>
+        <FieldName>Notification Identification</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Source for MT910 field :20:</Description>
+        <ExampleValue>CDT20260517001</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_02">
+        <FieldTag>Ntfctn.Ntry.NtryDtls.TxDtls.Refs.InstrId</FieldTag>
+        <FieldName>Instruction Identification</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Source for MT910 field :21:</Description>
+        <ExampleValue>TRXREF20260517002</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_03">
+        <FieldTag>Ntfctn.Acct.Id.IBAN</FieldTag>
+        <FieldName>Account IBAN</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Source for MT910 field :25: (falls back to Acct.Id.Othr.Id when absent)</Description>
+        <ExampleValue>FR7630006000011234567890189</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_04">
+        <FieldTag>Ntfctn.Acct.Id.Othr.Id</FieldTag>
+        <FieldName>Account Other Identification</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Fallback source for MT910 field :25: when no IBAN is present</Description>
+        <ExampleValue>TN987654321</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_05">
+        <FieldTag>Ntfctn.Ntry.ValDt.Dt</FieldTag>
+        <FieldName>Value Date</FieldName>
+        <DataType>DATE</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Combines with Ntry.Amt to build MT910 field :32A:</Description>
+        <ExampleValue>2026-05-17</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_06">
+        <FieldTag>Ntfctn.Ntry.Amt</FieldTag>
+        <FieldName>Entry Amount</FieldName>
+        <DataType>AMOUNT</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Combines with ValDt.Dt and Amt.@Ccy to build MT910 field :32A:</Description>
+        <ExampleValue>18000.00</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_07">
+        <FieldTag>Ntfctn.Ntry.NtryDtls.TxDtls.RltdAgts.DbtrAgt.FinInstnId.BICFI</FieldTag>
+        <FieldName>Debtor Agent BIC</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Source for MT910 field :52A: (Ordering Institution)</Description>
+        <ExampleValue>BNPAFRPPXXX</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_08">
+        <FieldTag>Ntfctn.Ntry.NtryDtls.TxDtls.AddtlTxInf</FieldTag>
+        <FieldName>Additional Transaction Information</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Source for MT910 field :72:</Description>
+        <ExampleValue>/EREF/TRXREF20260517002/REMI/Payment credit confirmation</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_09">
+        <FieldTag>Ntfctn.Ntry.Amt.@Ccy</FieldTag>
+        <FieldName>Entry Currency</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>Combines with ValDt.Dt and Amt to build MT910 field :32A:</Description>
+        <ExampleValue>EUR</ExampleValue>
+      </Field>
+
+      <!-- ENRICHMENT: matches forward MT910_to_camt054.xml's :50K:/:56A:
+           addition — MT900 has no equivalent, MT910-only. -->
+      <Field id="FIELD_10">
+        <FieldTag>Ntfctn.Ntry.NtryDtls.TxDtls.RltdPties.Cdtr.Nm</FieldTag>
+        <FieldName>Ordering Customer Name</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Source for MT910 field :50K:</Description>
+        <ExampleValue>JOHN DOE</ExampleValue>
+      </Field>
+
+      <Field id="FIELD_11">
+        <FieldTag>Ntfctn.Ntry.NtryDtls.TxDtls.RltdAgts.IntrmyAgt1.FinInstnId.BICFI</FieldTag>
+        <FieldName>Intermediary Agent BIC</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>Source for MT910 field :56A:</Description>
+        <ExampleValue>BARCGB22XXX</ExampleValue>
+      </Field>
+    </Fields>
+  </SourceMessage>
+
+  <!-- ============================================= -->
+  <!-- TARGET MESSAGE STRUCTURE (MT910 field tags) -->
+  <!-- ============================================= -->
+  <TargetMessage>
+    <MessageType>camt.054.001.08</MessageType>
+    <MessageName>MT910 field, as a bare F-tag key</MessageName>
+    <Standard>ISO 20022</Standard>
+
+    <Fields>
+      <Field id="TARGET_01">
+        <XPath>F20</XPath>
+        <FieldName>Transaction Reference Number</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>SWIFT MT910 field :20:</Description>
+      </Field>
+
+      <Field id="TARGET_02">
+        <XPath>F21</XPath>
+        <FieldName>Related Reference</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>SWIFT MT910 field :21:</Description>
+      </Field>
+
+      <Field id="TARGET_03">
+        <XPath>F25</XPath>
+        <FieldName>Account Identification</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>SWIFT MT910 field :25:</Description>
+      </Field>
+
+      <Field id="TARGET_04">
+        <XPath>F32A</XPath>
+        <FieldName>Value Date/Currency/Amount</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>true</Mandatory>
+        <Description>SWIFT MT910 field :32A: (composite: YYMMDD + CCY + amount)</Description>
+      </Field>
+
+      <Field id="TARGET_05">
+        <XPath>F52A</XPath>
+        <FieldName>Ordering Institution</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>SWIFT MT910 field :52A:</Description>
+      </Field>
+
+      <Field id="TARGET_06">
+        <XPath>F72</XPath>
+        <FieldName>Sender to Receiver Information</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>SWIFT MT910 field :72:</Description>
+      </Field>
+
+      <Field id="TARGET_07">
+        <XPath>F50K</XPath>
+        <FieldName>Ordering Customer</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>SWIFT MT910 field :50K:</Description>
+      </Field>
+
+      <Field id="TARGET_08">
+        <XPath>F56A</XPath>
+        <FieldName>Intermediary Institution</FieldName>
+        <DataType>STRING</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>SWIFT MT910 field :56A:</Description>
+      </Field>
+    </Fields>
+  </TargetMessage>
+
+  <!-- ============================================= -->
+  <!-- FIELD MAPPINGS -->
+  <!-- ============================================= -->
+  <FieldMappings>
+
+    <!-- ==================== MAPPING 01 ==================== -->
+    <Mapping id="MAPPING_01">
+      <SourceField ref="FIELD_01"/>
+      <TargetField ref="TARGET_01"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F20 = XML.Ntfctn.Id.truncate(16)</Expression>
+        <PseudoCode>
+          F20 = XML.Ntfctn.Id.truncate(16)
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>MT910 message has no transaction reference — mandatory field.</ImpactIfFails>
+        <BusinessRationale>Reverse of the forward direction's F20 -&gt; GrpHdr.MsgId/Ntfctn.Id mapping.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Direct copy, no transformation needed.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 02 ==================== -->
+    <Mapping id="MAPPING_02">
+      <SourceField ref="FIELD_02"/>
+      <TargetField ref="TARGET_02"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F21 = XML.Ntfctn.Ntry.NtryDtls.TxDtls.Refs.InstrId.truncate(16)</Expression>
+        <PseudoCode>
+          F21 = XML.Ntfctn.Ntry.NtryDtls.TxDtls.Refs.InstrId.truncate(16)
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>Related reference to originating transaction lost — mandatory field.</ImpactIfFails>
+        <BusinessRationale>Reverse of the forward direction's F21 -&gt; Refs.InstrId mapping.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Direct copy, no transformation needed.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 03 ==================== -->
+    <Mapping id="MAPPING_03">
+      <SourceField ref="FIELD_03"/>
+      <TargetField ref="TARGET_03"/>
+      <MappingFormula>
+        <Type>CONDITIONAL_COPY</Type>
+        <Expression>F25 = XML.Ntfctn.Acct.Id.IBAN ?: XML.Ntfctn.Acct.Id.Othr.Id</Expression>
+        <PseudoCode>
+          F25 = XML.Ntfctn.Acct.Id.IBAN ?: XML.Ntfctn.Acct.Id.Othr.Id
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Credited account unidentifiable — mandatory MT910 field.</ImpactIfFails>
+        <BusinessRationale>Reverse of the forward direction's IBAN-detection mapping — prefers IBAN, falls back to the proprietary Othr/Id when no IBAN is present.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Elvis operator (?:) picks whichever account identifier is populated.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 04 ==================== -->
+    <Mapping id="MAPPING_04">
+      <SourceField ref="FIELD_05"/>
+      <TargetField ref="TARGET_04"/>
+      <MappingFormula>
+        <Type>COMPOSITE_BUILD</Type>
+        <Expression>F32A = isoDateToSwift(XML.Ntfctn.Ntry.ValDt.Dt) + XML.Ntfctn.Ntry.Amt.@Ccy + toSwiftAmount(XML.Ntfctn.Ntry.Amt)</Expression>
+        <PseudoCode>
+          F32A = isoDateToSwift(XML.Ntfctn.Ntry.ValDt.Dt) + XML.Ntfctn.Ntry.Amt.@Ccy + toSwiftAmount(XML.Ntfctn.Ntry.Amt)
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Value date, currency and amount are all lost — MT910 unusable without :32A:.</ImpactIfFails>
+        <BusinessRationale>Rebuilds SWIFT's composite value-date+currency+amount field from the separate ISO 20022 elements.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE (string formatting only)</PerformanceImpact>
+        <MigrationNote>isoDateToSwift() converts YYYY-MM-DD -&gt; YYMMDD; toSwiftAmount() converts decimal '.' to SWIFT comma notation.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 05 ==================== -->
+    <Mapping id="MAPPING_05">
+      <SourceField ref="FIELD_07"/>
+      <TargetField ref="TARGET_05"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F52A = XML.Ntfctn.Ntry.NtryDtls.TxDtls.RltdAgts.DbtrAgt.FinInstnId.BICFI</Expression>
+        <PseudoCode>
+          F52A = XML.Ntfctn.Ntry.NtryDtls.TxDtls.RltdAgts.DbtrAgt.FinInstnId.BICFI
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Ordering institution missing — optional field, message still valid.</ImpactIfFails>
+        <BusinessRationale>Direct BIC passthrough from the debtor agent.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Direct copy, no transformation needed.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 06 ==================== -->
+    <Mapping id="MAPPING_06">
+      <SourceField ref="FIELD_08"/>
+      <TargetField ref="TARGET_06"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F72 = XML.Ntfctn.Ntry.NtryDtls.TxDtls.AddtlTxInf</Expression>
+        <PseudoCode>
+          F72 = XML.Ntfctn.Ntry.NtryDtls.TxDtls.AddtlTxInf
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>LOW</Criticality>
+        <ImpactIfFails>Sender-to-receiver narrative lost — optional field.</ImpactIfFails>
+        <BusinessRationale>Direct text passthrough.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Direct copy, no transformation needed.</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 07 ==================== -->
+    <Mapping id="MAPPING_07">
+      <SourceField ref="FIELD_10"/>
+      <TargetField ref="TARGET_07"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F50K = XML.Ntfctn.Ntry.NtryDtls.TxDtls.RltdPties.Cdtr.Nm</Expression>
+        <PseudoCode>
+          F50K = XML.Ntfctn.Ntry.NtryDtls.TxDtls.RltdPties.Cdtr.Nm
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>LOW</Criticality>
+        <ImpactIfFails>Ordering customer name missing from notification — optional field.</ImpactIfFails>
+        <BusinessRationale>Direct text passthrough — identifies the customer that originated the underlying payment being confirmed as credited.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Direct copy, no transformation needed (unlike MT103's :50K:, MT910's is a single name line with no account prefix).</MigrationNote>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 08 ==================== -->
+    <Mapping id="MAPPING_08">
+      <SourceField ref="FIELD_11"/>
+      <TargetField ref="TARGET_08"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>F56A = XML.Ntfctn.Ntry.NtryDtls.TxDtls.RltdAgts.IntrmyAgt1.FinInstnId.BICFI</Expression>
+        <PseudoCode>
+          F56A = XML.Ntfctn.Ntry.NtryDtls.TxDtls.RltdAgts.IntrmyAgt1.FinInstnId.BICFI
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Intermediary routing chain broken — optional field, message still valid.</ImpactIfFails>
+        <BusinessRationale>Direct BIC passthrough from the intermediary agent in the underlying interbank transfer chain.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <MigrationNote>Direct copy, no transformation needed.</MigrationNote>
+      </General>
+    </Mapping>
+
+  </FieldMappings>
+
+</MessageMapping>

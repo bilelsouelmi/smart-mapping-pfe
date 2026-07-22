@@ -14,7 +14,7 @@ const DashboardPage = () => {
     messageDescriptions: 0,
     mappingFormulas: 0,
     outputs: 0,
-    jobs: 0,
+    approvedRefs: 0,
     // ── NOUVEAU : MT stats ─────────────────────────────────────────────────
     mtFiles: 0,
     validatedFiles: 0,
@@ -41,11 +41,10 @@ const DashboardPage = () => {
 
   const loadStats = async () => {
     try {
-      const [msgDesc, mappings, outputs, jobs] = await Promise.all([
+      const [msgDesc, mappings, outputs] = await Promise.all([
         axios.get('http://localhost:8000/api/files/with-formulas'),
         axios.get('http://localhost:8000/api/mapping-formulas/'),
-        axios.get('http://localhost:8000/api/transform/outputs'),
-        axios.get('http://localhost:8000/api/transform/jobs')
+        axios.get('http://localhost:8000/api/transform/outputs')
       ]);
 
       // ── NOUVEAU : calculer stats MT depuis les fichiers ────────────────────
@@ -53,6 +52,7 @@ const DashboardPage = () => {
 
       const mtFiles = allFiles.filter(f => f.file_type === 'XML_MT');
       const validatedFiles = allFiles.filter(f => f.status === 'validated');
+      const approvedRefs = allFiles.filter(f => f.approved);
       const filesWithQuality = allFiles.filter(f => f.quality_score > 0);
       const filesWithCompletion = allFiles.filter(f => f.mapping_completion > 0);
 
@@ -75,7 +75,7 @@ const DashboardPage = () => {
         messageDescriptions: msgDesc.data.total || allFiles.length,
         mappingFormulas: mappings.data.total || mappings.data.length || 0,
         outputs: outputs.data.total_outputs || 0,
-        jobs: jobs.data.total || 0,
+        approvedRefs: approvedRefs.length,
         mtFiles: mtFiles.length,
         validatedFiles: validatedFiles.length,
         avgQualityScore: avgQuality,
@@ -145,8 +145,8 @@ const DashboardPage = () => {
           />
           <StatCard
             icon={<CheckCircle size={32} />}
-            title="Transformation Jobs"
-            value={loading ? '...' : stats.jobs}
+            title="Approved References"
+            value={loading ? '...' : stats.approvedRefs}
             sub={`${stats.validatedFiles} validated`}
             color="#f59e0b"
             delay={0.3}

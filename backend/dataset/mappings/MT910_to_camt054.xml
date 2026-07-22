@@ -1,0 +1,846 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MessageMapping version="1.0">
+
+  <!-- ============================================= -->
+  <!-- GENERAL INFORMATION -->
+  <!-- ============================================= -->
+  <GeneralInformation>
+    <MappingId>MAP_MT910_CAMT054_001</MappingId>
+    <MappingName>MT910 to camt.054 Conversion</MappingName>
+    <Version>2.1.0</Version>
+    <CreatedDate>2026-05-17</CreatedDate>
+    <CreatedBy>Bilel SOUELMI - Vermeg FinTech Team</CreatedBy>
+    <LastModifiedDate>2026-07-15</LastModifiedDate>
+    <Status>ACTIVE</Status>
+    <StandardReference>Bank of America Reference Guide — Credit and Debit Notification (CAMT.054) — CBPR+ ISO 20022</StandardReference>
+
+    <BusinessContext>
+      <Description>
+        Converts SWIFT MT910 (Confirmation of Credit) to ISO 20022 camt.054.001.08
+        (BankToCustomerDebitCreditNotification). MT910 is the credit-side counterpart
+        of MT900 — sent by a financial institution to confirm to another financial
+        institution that a credit has been made to the sender's account.
+        For MT910: Ntry/CdtDbtInd = CRDT and Ntry/NtryDtls/TxDtls/CdtDbtInd = CRDT
+        (both mandatory at Entry AND Transaction Details level).
+        Per SWIFT CBPR+ roadmap: MT900/MT910 migrate to camt.054 by November 2028.
+      </Description>
+      <UseCases>
+        <UseCase>Interbank credit confirmation after funds received</UseCase>
+        <UseCase>Nostro account credit notification to account owner</UseCase>
+        <UseCase>Settlement confirmation for correspondent banking credits</UseCase>
+        <UseCase>Reconciliation of credit entries in treasury management systems</UseCase>
+        <UseCase>Confirmation of incoming cover payment via MT202COV</UseCase>
+      </UseCases>
+      <ApplicableDomains>Correspondent Banking, Treasury Operations, Nostro Reconciliation, Interbank Settlement, Cash Management, Payments Hub</ApplicableDomains>
+    </BusinessContext>
+
+    <TechnicalSpecifications>
+      <SourceFormat>SWIFT MT910 (ISO 15022 — Category 9 Cash Management)</SourceFormat>
+      <TargetFormat>ISO 20022 camt.054.001.08 (XML)</TargetFormat>
+      <ProcessingMode>REAL_TIME</ProcessingMode>
+      <AverageProcessingTime>30ms per notification</AverageProcessingTime>
+      <MaxProcessingTime>300ms</MaxProcessingTime>
+      <AmountPrecision>FractionDigits=5, TotalDigits=18 per ISO 20022 schema</AmountPrecision>
+      <KeyDifference>
+        MT910 carries only credit notifications — the mirror image of MT900.
+        CdtDbtInd = CRDT at BOTH entry level AND transaction details level.
+        Same three new mandatory fields as MT900: NtryRef (NOTPROVIDED),
+        Sts/Cd (BOOK), BkTxCd (NOTPROVIDED).
+        RltdAgts path uses CdtrAgt (not DbtrAgt) since MT910 field :52A: identifies
+        the institution that CREDITED the account — semantically the creditor agent
+        in the underlying transaction from the notified party's perspective.
+      </KeyDifference>
+    </TechnicalSpecifications>
+
+    <ComplianceRequirements>
+      <Regulation>SWIFT Standards MT910 Usage Guidelines (Category 9)</Regulation>
+      <Regulation>ISO 20022 camt.054.001.08 Implementation Guidelines (CBPR+)</Regulation>
+      <Regulation>SWIFT CBPR+ Migration Roadmap — November 2028 for advices</Regulation>
+      <Regulation>CGI-MP BankToCustomerDebitCreditNotification Implementation Guidelines</Regulation>
+      <Regulation>Bank of America Reference Guide — Credit and Debit Notification (CAMT.054)</Regulation>
+      <Regulation>GDPR — Financial Institution Data Protection (Regulation EU 2016/679)</Regulation>
+      <Regulation>Basel III Intraday Liquidity Monitoring (BCBS 248)</Regulation>
+    </ComplianceRequirements>
+
+    <GlobalVariables>
+      <Variable name="MAX_MSG_ID_LENGTH" value="35" type="INTEGER" description="Maximum length of camt.054 MsgId per ISO 20022 Max35Text"/>
+      <Variable name="MAX_REF_LENGTH" value="16" type="INTEGER" description="Maximum length of MT910 field :20: per SWIFT Category 9"/>
+      <Variable name="CREDIT_DEBIT_INDICATOR" value="CRDT" type="STRING" description="Fixed CRDT for all MT910 — set at BOTH Ntry/CdtDbtInd AND TxDtls/CdtDbtInd"/>
+      <Variable name="ENTRY_STATUS" value="BOOK" type="STRING" description="Fixed BOOK — mandatory new camt.054 field Ntry/Sts/Cd"/>
+      <Variable name="ENTRY_REF_FIXED" value="NOTPROVIDED" type="STRING" description="Fixed NOTPROVIDED — mandatory new camt.054 field Ntry/NtryRef"/>
+      <Variable name="BANK_TX_CODE_FIXED" value="NOTPROVIDED" type="STRING" description="Fixed NOTPROVIDED — mandatory new camt.054 field Ntry/BkTxCd/Prtry/Cd and Issr"/>
+      <Variable name="AMOUNT_FRACTION_DIGITS" value="5" type="INTEGER" description="ISO 20022 camt.054 amount fraction digits per schema"/>
+      <Variable name="AMOUNT_TOTAL_DIGITS" value="18" type="INTEGER" description="ISO 20022 camt.054 amount total digits per schema"/>
+      <Variable name="CENTURY_CUTOFF_YEAR" value="50" type="INTEGER" description="2-digit year cutoff for YYMMDD to YYYY-MM-DD date conversion"/>
+      <Variable name="AUDIT_RETENTION_YEARS" value="7" type="INTEGER" description="Regulatory minimum audit log retention period"/>
+      <Variable name="PROCESSING_TIMEZONE" value="UTC" type="STRING" description="All timestamps in UTC per CBPR+ guidelines"/>
+      <Variable name="DUPLICATE_DETECTION_WINDOW_HOURS" value="24" type="INTEGER" description="Hours for duplicate MT910 detection"/>
+      <Variable name="IBAN_PATTERN" value="^[A-Z]{2}\d{2}[A-Z0-9]+$" type="STRING" description="IBAN detection regex for field :25:"/>
+      <Variable name="LARGE_CREDIT_THRESHOLD" value="1000000" type="DECIMAL" description="Credit amount above this triggers treasury alert"/>
+    </GlobalVariables>
+  </GeneralInformation>
+
+  <!-- ============================================= -->
+  <!-- SOURCE MESSAGE STRUCTURE (MT910) -->
+  <!-- ============================================= -->
+  <SourceMessage>
+    <MessageType>MT910</MessageType>
+    <MessageName>Confirmation of Credit</MessageName>
+    <Standard>SWIFT ISO 15022 — Category 9 (Cash Management and Customer Status)</Standard>
+    <MessagePurpose>
+      Sent by an account servicing institution to the account owner or authorised party
+      to confirm that a credit entry has been posted to the account. The credit-side
+      counterpart to MT900. Both are replaced by camt.054 in ISO 20022 — distinguished
+      by CdtDbtInd value (CRDT for MT910, DBIT for MT900).
+    </MessagePurpose>
+
+    <Fields>
+
+      <Field id="FIELD_01">
+        <FieldTag>:20:</FieldTag>
+        <FieldName>Transaction Reference Number</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>16</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Format>16x</Format>
+        <Description>
+          Unique reference assigned by the sender to identify the MT910 message.
+          Maps to both GrpHdr/MsgId and Ntfctn/Id per BoA reference guide section 1.
+        </Description>
+        <ExampleValue>CDT20260517001</ExampleValue>
+        <ValidationRules>
+          <Rule>Unique per sender BIC per calendar day</Rule>
+          <Rule>Maximum 16 characters — SWIFT Character Set X</Rule>
+          <Rule>Must not start or end with / (T26 error code)</Rule>
+        </ValidationRules>
+        <ElementId>MSG_REF</ElementId>
+        <TargetPath>GrpHdr/MsgId AND Ntfctn/Id</TargetPath>
+      </Field>
+
+      <Field id="FIELD_02">
+        <FieldTag>:21:</FieldTag>
+        <FieldName>Related Reference</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>16</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Format>16x</Format>
+        <Description>
+          Reference of the original transaction that caused the credit.
+          Maps to Ntfctn/Ntry/NtryDtls/TxDtls/Refs/InstrId AND EndToEndId.
+          Use NONREF if no related reference is available.
+        </Description>
+        <ExampleValue>TRXREF20260517002</ExampleValue>
+        <ElementId>RELATED_REF</ElementId>
+        <TargetPath>Ntfctn/Ntry/NtryDtls/TxDtls/Refs/InstrId AND Refs/EndToEndId</TargetPath>
+      </Field>
+
+      <Field id="FIELD_03">
+        <FieldTag>:25:</FieldTag>
+        <FieldName>Account Identification</FieldName>
+        <DataType>STRING</DataType>
+        <MaxLength>35</MaxLength>
+        <Mandatory>true</Mandatory>
+        <Format>35x</Format>
+        <Description>
+          Identification of the credited account.
+          Maps to Ntfctn/Acct/Id (IBAN or Othr) AND Ntfctn/Acct/Ccy.
+        </Description>
+        <ExampleValue>TN123456789</ExampleValue>
+        <ElementId>ACCT_ID</ElementId>
+        <TargetPath>Ntfctn/Acct/Id/IBAN or Ntfctn/Acct/Id/Othr/Id AND Ntfctn/Acct/Ccy</TargetPath>
+      </Field>
+
+      <Field id="FIELD_04">
+        <FieldTag>:13D:</FieldTag>
+        <FieldName>Date/Time Indication</FieldName>
+        <DataType>COMPOSITE</DataType>
+        <MaxLength>18</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Format>6!n4!n1!x4!n</Format>
+        <Description>
+          Date and time of entry posting with UTC offset.
+          Maps to Ntfctn/Ntry/BookgDt/DtTm. Only present when booking date differs
+          from value date. Optional — not always present in MT910.
+        </Description>
+        <ExampleValue>2605171015+0200</ExampleValue>
+        <ElementId>ENTRY_DATETIME</ElementId>
+        <TargetPath>Ntfctn/Ntry/BookgDt/DtTm</TargetPath>
+      </Field>
+
+      <Field id="FIELD_05">
+        <FieldTag>:32A:</FieldTag>
+        <FieldName>Value Date, Currency Code, Amount</FieldName>
+        <DataType>COMPOSITE</DataType>
+        <Mandatory>true</Mandatory>
+        <Format>6!n3!a15d</Format>
+        <Description>
+          Value date, currency and amount of the credit entry.
+          Maps to FOUR camt.054 paths: Ntry/Amt, Ntry/ValDt/Dt, TxDtls/Amt,
+          TxDtls/RltdDts/IntrBkSttlmDt. Also derives Ntfctn/Acct/Ccy.
+        </Description>
+        <ExampleValue>260517USD75000,</ExampleValue>
+        <ElementId>VALUE_AMT</ElementId>
+        <TargetPath>Ntry/Amt + Ntry/Amt/@Ccy + Ntry/ValDt/Dt + TxDtls/Amt + TxDtls/RltdDts/IntrBkSttlmDt</TargetPath>
+      </Field>
+
+      <Field id="FIELD_06">
+        <FieldTag>:52A:</FieldTag>
+        <FieldName>Ordering Institution</FieldName>
+        <DataType>BIC</DataType>
+        <MaxLength>35</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Format>[[/1!a][/34x]]CRLF4!a2!a2!c[3!c]</Format>
+        <Description>
+          BIC of the financial institution that sent the funds resulting in this credit.
+          Maps to Ntfctn/Ntry/NtryDtls/TxDtls/RltdAgts/CdtrAgt/FinInstnId/BICFI.
+          Uses CdtrAgt path (not DbtrAgt) since this institution acted as the
+          crediting party's counterpart in the underlying interbank transfer.
+        </Description>
+        <ExampleValue>CHASUS33XXX</ExampleValue>
+        <ElementId>ORDERING_INST</ElementId>
+        <TargetPath>Ntfctn/Ntry/NtryDtls/TxDtls/RltdAgts/CdtrAgt/FinInstnId/BICFI</TargetPath>
+      </Field>
+
+      <Field id="FIELD_07">
+        <FieldTag>:72:</FieldTag>
+        <FieldName>Sender to Receiver Information</FieldName>
+        <DataType>TEXT</DataType>
+        <MaxLength>210</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Format>6*35x</Format>
+        <Description>
+          Additional information from sender to receiver.
+          Maps to Ntfctn/Ntry/NtryDtls/TxDtls/AddtlTxInf (Max500Text).
+          Content preserved without parsing into separate elements.
+        </Description>
+        <ExampleValue>/EREF/TRXREF20260517002/REMI/Payment credit confirmation</ExampleValue>
+        <ElementId>SNDR_RCVR_INFO</ElementId>
+        <TargetPath>Ntfctn/Ntry/NtryDtls/TxDtls/AddtlTxInf</TargetPath>
+      </Field>
+
+      <!-- ADDED: :50a:/:56a: dataset enrichment — these are standard,
+           commonly-populated optional MT910 fields with no coverage before
+           this. -->
+      <Field id="FIELD_08">
+        <FieldTag>:50K:</FieldTag>
+        <FieldName>Ordering Customer</FieldName>
+        <DataType>TEXT</DataType>
+        <MaxLength>140</MaxLength>
+        <Mandatory>false</Mandatory>
+        <Format>4*35x</Format>
+        <Description>
+          Customer that originated the underlying payment being confirmed as credited.
+          Maps to Ntfctn/Ntry/NtryDtls/TxDtls/RltdPties/Cdtr/Nm.
+          Uses Cdtr path (not Dbtr) for the same reason FIELD_06 uses CdtrAgt:
+          this party is the crediting side's counterpart in the underlying
+          transfer, kept consistent with the :52A: convention above.
+        </Description>
+        <ExampleValue>/12345678901234
+JOHN DOE</ExampleValue>
+        <ElementId>ORDERING_CUST</ElementId>
+        <TargetPath>Ntfctn/Ntry/NtryDtls/TxDtls/RltdPties/Cdtr/Nm</TargetPath>
+      </Field>
+
+      <Field id="FIELD_09">
+        <FieldTag>:56A:</FieldTag>
+        <FieldName>Intermediary Institution</FieldName>
+        <DataType>BIC</DataType>
+        <Mandatory>false</Mandatory>
+        <Description>
+          Intermediary bank in the underlying interbank transfer chain.
+          Maps to Ntfctn/Ntry/NtryDtls/TxDtls/RltdAgts/IntrmyAgt1/FinInstnId/BICFI.
+        </Description>
+        <ExampleValue>BARCGB22</ExampleValue>
+        <ElementId>INTERMEDIARY_INST</ElementId>
+        <TargetPath>Ntfctn/Ntry/NtryDtls/TxDtls/RltdAgts/IntrmyAgt1/FinInstnId/BICFI</TargetPath>
+      </Field>
+
+    </Fields>
+  </SourceMessage>
+
+  <!-- ============================================= -->
+  <!-- TARGET MESSAGE STRUCTURE (camt.054) -->
+  <!-- ============================================= -->
+  <TargetMessage>
+    <MessageType>camt.054.001.08</MessageType>
+    <MessageName>BankToCustomerDebitCreditNotification</MessageName>
+    <Standard>ISO 20022</Standard>
+    <Schema>camt.054.001.08.xsd</Schema>
+    <Namespace>urn:iso:std:iso:20022:tech:xsd:camt.054.001.08</Namespace>
+    <MT910_Specific_Note>
+      MT910-derived camt.054 always has:
+      - Ntry/CdtDbtInd = CRDT
+      - Ntry/NtryDtls/TxDtls/CdtDbtInd = CRDT (BOTH levels mandatory)
+      - Ntry/NtryRef = "NOTPROVIDED" (mandatory new field, fixed value)
+      - Ntry/Sts/Cd = BOOK (mandatory new field, fixed value)
+      - Ntry/BkTxCd/Prtry/Cd = "NOTPROVIDED" (mandatory new field, fixed value)
+      - RltdAgts/CdtrAgt (not DbtrAgt) for the ordering institution
+    </MT910_Specific_Note>
+
+    <Fields>
+
+      <Field id="FIELD_01">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/GrpHdr/MsgId</XPath>
+        <FieldName>Message Identification</FieldName>
+        <Mandatory>true</Mandatory>
+        <ExampleValue>CDT20260517001</ExampleValue>
+        <SourceMT>:20:</SourceMT>
+      </Field>
+
+      <Field id="FIELD_02">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/GrpHdr/CreDtTm</XPath>
+        <FieldName>Creation Date Time</FieldName>
+        <Mandatory>true</Mandatory>
+        <ExampleValue>2026-05-17T10:15:22Z</ExampleValue>
+        <SourceMT>SYSTEM_GENERATED</SourceMT>
+      </Field>
+
+      <Field id="FIELD_03">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Id</XPath>
+        <FieldName>Notification Identification</FieldName>
+        <Mandatory>true</Mandatory>
+        <ExampleValue>CDT20260517001</ExampleValue>
+        <SourceMT>:20:</SourceMT>
+      </Field>
+
+      <Field id="FIELD_04">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Acct/Id</XPath>
+        <FieldName>Account Identification</FieldName>
+        <Mandatory>true</Mandatory>
+        <ExampleValue>TN123456789 → Othr/Id</ExampleValue>
+        <SourceMT>:25:</SourceMT>
+      </Field>
+
+      <Field id="FIELD_05">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Acct/Ccy</XPath>
+        <FieldName>Account Currency</FieldName>
+        <Mandatory>false</Mandatory>
+        <ExampleValue>USD</ExampleValue>
+        <SourceMT>:32A: (currency component)</SourceMT>
+      </Field>
+
+      <Field id="FIELD_06">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/NtryRef</XPath>
+        <FieldName>Entry Reference</FieldName>
+        <Mandatory>true</Mandatory>
+        <FixedValue>NOTPROVIDED</FixedValue>
+        <SourceMT>NEW_FIELD — no MT910 equivalent</SourceMT>
+      </Field>
+
+      <Field id="FIELD_07">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/Amt</XPath>
+        <FieldName>Entry Amount</FieldName>
+        <Mandatory>true</Mandatory>
+        <AmountFractionDigits>5</AmountFractionDigits>
+        <AmountTotalDigits>18</AmountTotalDigits>
+        <ExampleValue Ccy="USD">75000.00000</ExampleValue>
+        <SourceMT>:32A: (amount + currency components)</SourceMT>
+      </Field>
+
+      <Field id="FIELD_08">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/CdtDbtInd</XPath>
+        <FieldName>Credit Debit Indicator (Entry Level)</FieldName>
+        <Mandatory>true</Mandatory>
+        <FixedValue>CRDT</FixedValue>
+        <SourceMT>block2 message type (910=CRDT)</SourceMT>
+      </Field>
+
+      <Field id="FIELD_09">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/Sts/Cd</XPath>
+        <FieldName>Entry Status</FieldName>
+        <Mandatory>true</Mandatory>
+        <FixedValue>BOOK</FixedValue>
+        <SourceMT>NEW_FIELD — no MT910 equivalent</SourceMT>
+      </Field>
+
+      <Field id="FIELD_10">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/BookgDt/DtTm</XPath>
+        <FieldName>Booking Date Time</FieldName>
+        <Mandatory>false</Mandatory>
+        <ExampleValue>2026-05-17T10:15:00+02:00</ExampleValue>
+        <SourceMT>:13D: (optional)</SourceMT>
+      </Field>
+
+      <Field id="FIELD_11">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/ValDt/Dt</XPath>
+        <FieldName>Value Date</FieldName>
+        <Mandatory>true</Mandatory>
+        <ExampleValue>2026-05-17</ExampleValue>
+        <SourceMT>:32A: (date component)</SourceMT>
+      </Field>
+
+      <Field id="FIELD_12">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/BkTxCd/Prtry/Cd</XPath>
+        <FieldName>Bank Transaction Code</FieldName>
+        <Mandatory>true</Mandatory>
+        <FixedValue>NOTPROVIDED</FixedValue>
+        <SourceMT>NEW_FIELD — no MT910 equivalent</SourceMT>
+      </Field>
+
+      <Field id="FIELD_13">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/NtryDtls/TxDtls/Refs/InstrId</XPath>
+        <FieldName>Instruction Identification</FieldName>
+        <Mandatory>true</Mandatory>
+        <ExampleValue>TRXREF20260517002</ExampleValue>
+        <SourceMT>:21:</SourceMT>
+      </Field>
+
+      <Field id="FIELD_14">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/NtryDtls/TxDtls/Amt</XPath>
+        <FieldName>Transaction Amount</FieldName>
+        <Mandatory>true</Mandatory>
+        <AmountFractionDigits>5</AmountFractionDigits>
+        <AmountTotalDigits>18</AmountTotalDigits>
+        <ExampleValue Ccy="USD">75000.00000</ExampleValue>
+        <SourceMT>:32A: (same as Ntry/Amt)</SourceMT>
+      </Field>
+
+      <Field id="FIELD_15">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/NtryDtls/TxDtls/CdtDbtInd</XPath>
+        <FieldName>Credit Debit Indicator (Transaction Level)</FieldName>
+        <Mandatory>true</Mandatory>
+        <FixedValue>CRDT</FixedValue>
+        <SourceMT>block2 message type (same as Ntry/CdtDbtInd)</SourceMT>
+      </Field>
+
+      <Field id="FIELD_16">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/NtryDtls/TxDtls/RltdDts/IntrBkSttlmDt</XPath>
+        <FieldName>Interbank Settlement Date</FieldName>
+        <Mandatory>false</Mandatory>
+        <ExampleValue>2026-05-17</ExampleValue>
+        <SourceMT>:32A: (date component — same as ValDt/Dt)</SourceMT>
+      </Field>
+
+      <Field id="FIELD_17">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/NtryDtls/TxDtls/RltdAgts/CdtrAgt/FinInstnId/BICFI</XPath>
+        <FieldName>Creditor Agent BIC</FieldName>
+        <Mandatory>false</Mandatory>
+        <ExampleValue>CHASUS33XXX</ExampleValue>
+        <SourceMT>:52A: (optional)</SourceMT>
+      </Field>
+
+      <Field id="FIELD_18">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/NtryDtls/TxDtls/AddtlTxInf</XPath>
+        <FieldName>Additional Transaction Information</FieldName>
+        <Mandatory>false</Mandatory>
+        <ExampleValue>/EREF/TRXREF20260517002/REMI/Payment credit confirmation</ExampleValue>
+        <SourceMT>:72: (optional)</SourceMT>
+      </Field>
+
+      <Field id="FIELD_19">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/NtryDtls/TxDtls/RltdPties/Cdtr/Nm</XPath>
+        <FieldName>Ordering Customer Name</FieldName>
+        <Mandatory>false</Mandatory>
+        <ExampleValue>JOHN DOE</ExampleValue>
+        <SourceMT>:50K: (optional)</SourceMT>
+      </Field>
+
+      <Field id="FIELD_20">
+        <XPath>/Document/BkToCstmrDbtCdtNtfctn/Ntfctn/Ntry/NtryDtls/TxDtls/RltdAgts/IntrmyAgt1/FinInstnId/BICFI</XPath>
+        <FieldName>Intermediary Agent BIC</FieldName>
+        <Mandatory>false</Mandatory>
+        <ExampleValue>BARCGB22</ExampleValue>
+        <SourceMT>:56A: (optional)</SourceMT>
+      </Field>
+
+    </Fields>
+  </TargetMessage>
+
+  <!-- ============================================= -->
+  <!-- FIELD MAPPINGS -->
+  <!-- ============================================= -->
+  <!-- NOTE ON THIS REVISION (v2.1.0): PseudoCode blocks simplified to
+       short, executable formulas per supervisor review. Mirror of
+       MT900_to_camt054.xml but with CRDT instead of DBIT, and CdtrAgt
+       instead of DbtrAgt (field :52A: in MT910 identifies the crediting
+       counterpart institution, mapped to CdtrAgt per BoA guide semantics
+       for credit notifications). All other structure identical to MT900
+       mapping (NtryRef/Sts/BkTxCd fixed fields, dual CdtDbtInd, dual
+       amount/date paths). -->
+  <FieldMappings>
+
+    <!-- ==================== MAPPING 01 ==================== -->
+    <Mapping id="MAPPING_01">
+      <SourceField ref="FIELD_01"/>
+      <TargetFields>
+        <TargetField ref="FIELD_01"/>
+        <TargetField ref="FIELD_03"/>
+      </TargetFields>
+      <MappingFormula>
+        <Type>ONE_TO_TWO_DIRECT_COPY</Type>
+        <Expression>GrpHdr.MsgId = Ntfctn.Id = MT.F20.trim()</Expression>
+        <PseudoCode>
+          GrpHdr.MsgId = MT.F20.trim()
+          Ntfctn.Id = MT.F20.trim()
+        </PseudoCode>
+      </MappingFormula>
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_20 != null AND trim(source.field_20) != ""</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT "E001: Missing mandatory field :20:"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>DUPLICATE_DETECTION</Type>
+          <Expression>NOT exists_duplicate(source.field_20, sender_bic, today, DUPLICATE_DETECTION_WINDOW_HOURS)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT "E004: Duplicate MT910 notification"</ElseAction>
+        </Condition>
+      </Conditions>
+      <GlobalVariables>
+        <Variable ref="MAX_MSG_ID_LENGTH"/>
+        <Variable ref="MAX_REF_LENGTH"/>
+        <Variable ref="DUPLICATE_DETECTION_WINDOW_HOURS"/>
+      </GlobalVariables>
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>Notification unidentifiable. Duplicate detection impossible.</ImpactIfFails>
+        <BusinessRationale>Field :20: populates both GrpHdr/MsgId and Ntfctn/Id — same pattern as MT900 conversion.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <AuditRequirement>All notifications logged for AUDIT_RETENTION_YEARS years.</AuditRequirement>
+        <ComplianceRequirement>MsgId and Ntfctn/Id mandatory per camt.054 schema.</ComplianceRequirement>
+        <DataPrivacy>No customer PII.</DataPrivacy>
+        <MigrationNote>Identical pattern to MT900 MAPPING_01 — MT910 field :20: is functionally the same reference field.</MigrationNote>
+        <CachingStrategy>Processed references cached for duplicate detection.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 02 ==================== -->
+    <Mapping id="MAPPING_02">
+      <SourceField ref="NONE"/>
+      <TargetField ref="FIELD_02"/>
+      <MappingFormula>
+        <Type>SYSTEM_GENERATED_UTC_TIMESTAMP</Type>
+        <Expression>GrpHdr.CreDtTm = now("yyyy-MM-dd'T'HH:mm:ss'Z'")</Expression>
+        <PseudoCode>
+          GrpHdr.CreDtTm = now("yyyy-MM-dd'T'HH:mm:ss'Z'")
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>MEDIUM</Criticality>
+        <ImpactIfFails>Schema validation failure — GrpHdr/CreDtTm mandatory.</ImpactIfFails>
+        <BusinessRationale>Mandatory camt.054 header field. No MT910 equivalent.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <AuditRequirement>Conversion timestamp logged for SLA measurement.</AuditRequirement>
+        <ComplianceRequirement>Mandatory per camt.054 schema. UTC per CBPR+.</ComplianceRequirement>
+        <DataPrivacy>No PII — operational timestamp.</DataPrivacy>
+        <MigrationNote>Same as MT900 MAPPING_02 — generated fresh at conversion time.</MigrationNote>
+        <CachingStrategy>Not applicable.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 03 ==================== -->
+    <Mapping id="MAPPING_03">
+      <SourceField ref="FIELD_03"/>
+      <TargetFields>
+        <TargetField ref="FIELD_04"/>
+        <TargetField ref="FIELD_05"/>
+      </TargetFields>
+      <MappingFormula>
+        <Type>IBAN_DETECTION_WITH_CURRENCY_DERIVATION</Type>
+        <Expression>if(isIBAN(MT.F25)) Ntfctn.Acct.Id.IBAN = MT.F25; else Ntfctn.Acct.Id.Othr.Id = MT.F25</Expression>
+        <PseudoCode>
+          if(isIBAN(MT.F25)) Ntfctn.Acct.Id.IBAN = MT.F25.trim()
+          if(!isIBAN(MT.F25)) Ntfctn.Acct.Id.Othr.Id = MT.F25.trim()
+          Ntfctn.Acct.Ccy = MT.F32A.currency
+        </PseudoCode>
+      </MappingFormula>
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_25 != null AND trim(source.field_25) != ""</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT "E005: Missing mandatory field :25:"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>AUTHORIZATION_CHECK</Type>
+          <Expression>account_authorized_for_recipient(account, recipient_bic)</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT SECURITY "SEC001: Account not authorized for recipient"</ElseAction>
+        </Condition>
+      </Conditions>
+      <GlobalVariables>
+        <Variable ref="IBAN_PATTERN"/>
+      </GlobalVariables>
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Notification for wrong account — reconciliation failure and unauthorized financial data disclosure.</ImpactIfFails>
+        <BusinessRationale>Account identification is the primary key linking notification to the correct nostro ledger. Same logic as MT900.</BusinessRationale>
+        <PerformanceImpact>LOW — IBAN regex + modulo-97 + authorization lookup (~6ms)</PerformanceImpact>
+        <AuditRequirement>Account ID and authorization result logged. Retention: AUDIT_RETENTION_YEARS years.</AuditRequirement>
+        <ComplianceRequirement>Account authorization per banking secrecy laws and GDPR Article 5.</ComplianceRequirement>
+        <DataPrivacy>Account number is financial confidential data. AES-256 at rest, TLS 1.3+ in transit.</DataPrivacy>
+        <MigrationNote>Identical logic to MT900 MAPPING_03 — account is credited rather than debited but identification logic is the same.</MigrationNote>
+        <CachingStrategy>Authorization cached per session.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 04 ==================== -->
+    <Mapping id="MAPPING_04">
+      <SourceField ref="FIELD_05"/>
+      <TargetFields>
+        <TargetField ref="FIELD_07"/>
+        <TargetField ref="FIELD_08"/>
+        <TargetField ref="FIELD_11"/>
+        <TargetField ref="FIELD_14"/>
+        <TargetField ref="FIELD_15"/>
+        <TargetField ref="FIELD_16"/>
+      </TargetFields>
+      <MappingFormula>
+        <Type>COMPOSITE_FIELD_TO_SIX_TARGET_PATHS</Type>
+        <Expression>Ntry.Amt = TxDtls.Amt = decimal(MT.F32A.amount.replace(",","."))</Expression>
+        <PseudoCode>
+          Ntry.Amt = decimal(MT.F32A.amount.replace(",","."))
+          Ntry.CdtDbtInd = "CRDT"
+          Ntry.ValDt.Dt = expandCentury(MT.F32A.date, "yyMMdd", CENTURY_CUTOFF_YEAR)
+          TxDtls.Amt = decimal(MT.F32A.amount.replace(",","."))
+          TxDtls.CdtDbtInd = "CRDT"
+          TxDtls.RltdDts.IntrBkSttlmDt = expandCentury(MT.F32A.date, "yyMMdd", CENTURY_CUTOFF_YEAR)
+        </PseudoCode>
+      </MappingFormula>
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_32A != null AND trim(source.field_32A) != ""</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT "E008: Missing mandatory field :32A:"</ElseAction>
+        </Condition>
+        <Condition priority="2">
+          <Type>FORMAT_VALIDATION</Type>
+          <Expression>matches(source.field_32A, "^\d{6}[A-Z]{3}[\d,]+$")</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT "E009: Invalid :32A: format — expected 6!n3!a15d"</ElseAction>
+        </Condition>
+        <Condition priority="3">
+          <Type>LARGE_AMOUNT_ALERT</Type>
+          <Expression>amount_value &lt;= LARGE_CREDIT_THRESHOLD</Expression>
+          <Action>PROCEED normally</Action>
+          <ElseAction>ALERT treasury AND PROCEED — warning not rejection</ElseAction>
+        </Condition>
+        <Condition priority="4">
+          <Type>FIXED_CRDT_INDICATOR_AT_BOTH_LEVELS</Type>
+          <Expression>true</Expression>
+          <Action>SET Ntry/CdtDbtInd = "CRDT" AND TxDtls/CdtDbtInd = "CRDT" (both mandatory)</Action>
+          <ElseAction>N/A</ElseAction>
+        </Condition>
+      </Conditions>
+      <GlobalVariables>
+        <Variable ref="CREDIT_DEBIT_INDICATOR"/>
+        <Variable ref="CENTURY_CUTOFF_YEAR"/>
+        <Variable ref="AMOUNT_FRACTION_DIGITS"/>
+        <Variable ref="AMOUNT_TOTAL_DIGITS"/>
+        <Variable ref="LARGE_CREDIT_THRESHOLD"/>
+      </GlobalVariables>
+      <General>
+        <Criticality>CRITICAL</Criticality>
+        <ImpactIfFails>Complete notification failure — amount and value date are core financial data.</ImpactIfFails>
+        <BusinessRationale>
+          Same 6-path composite extraction as MT900, but CdtDbtInd = CRDT throughout
+          instead of DBIT. Field :32A: populates Ntry/Amt+Ccy, Ntry/ValDt/Dt, TxDtls/Amt+Ccy,
+          and TxDtls/RltdDts/IntrBkSttlmDt.
+        </BusinessRationale>
+        <PerformanceImpact>LOW — all in-memory operations</PerformanceImpact>
+        <AuditRequirement>Amount, currency, date, and both CdtDbtInd values logged. Large credit alerts logged separately.</AuditRequirement>
+        <ComplianceRequirement>Accurate credit reporting for Basel III LCR (BCBS 248). CdtDbtInd correctness critical.</ComplianceRequirement>
+        <DataPrivacy>Transaction amounts are financial confidential data.</DataPrivacy>
+        <MigrationNote>Identical structure to MT900 MAPPING_04 but with CRDT fixed value instead of DBIT — this is the only functional difference.</MigrationNote>
+        <CachingStrategy>No caching — parsed fresh from each MT910.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 05 ==================== -->
+    <Mapping id="MAPPING_05">
+      <SourceField ref="FIELD_02"/>
+      <TargetField ref="FIELD_13"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY_TO_INSTR_ID_AND_END_TO_END</Type>
+        <Expression>Refs.InstrId = Refs.EndToEndId = (MT.F21 == "NONREF") ? "NOTPROVIDED" : MT.F21.trim()</Expression>
+        <PseudoCode>
+          ref = (MT.F21 == "NONREF") ? "NOTPROVIDED" : MT.F21.trim()
+          Refs.InstrId = ref
+          Refs.EndToEndId = ref
+        </PseudoCode>
+      </MappingFormula>
+      <Conditions>
+        <Condition priority="1">
+          <Type>MANDATORY_CHECK</Type>
+          <Expression>source.field_21 != null AND trim(source.field_21) != ""</Expression>
+          <Action>PROCEED</Action>
+          <ElseAction>REJECT "E013: Missing mandatory field :21:"</ElseAction>
+        </Condition>
+      </Conditions>
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>Automated reconciliation impossible — cannot match credit notification to original payment.</ImpactIfFails>
+        <BusinessRationale>Same dual-population logic as MT900 MAPPING_05: field :21: maps to both InstrId and EndToEndId.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <AuditRequirement>Related reference logged per notification.</AuditRequirement>
+        <ComplianceRequirement>Transaction traceability per FATF Travel Rule.</ComplianceRequirement>
+        <DataPrivacy>Payment reference is operational data.</DataPrivacy>
+        <MigrationNote>Identical to MT900 MAPPING_05 — NONREF → NOTPROVIDED convention applies equally.</MigrationNote>
+        <CachingStrategy>Not applicable.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 06 ==================== -->
+    <Mapping id="MAPPING_06">
+      <SourceField ref="NONE"/>
+      <TargetFields>
+        <TargetField ref="FIELD_06"/>
+        <TargetField ref="FIELD_09"/>
+        <TargetField ref="FIELD_12"/>
+      </TargetFields>
+      <MappingFormula>
+        <Type>FIXED_VALUE_MANDATORY_NEW_FIELDS</Type>
+        <Expression>Ntry.NtryRef = "NOTPROVIDED"; Ntry.Sts.Cd = "BOOK"; Ntry.BkTxCd.Prtry.Cd/Issr = "NOTPROVIDED"</Expression>
+        <PseudoCode>
+          Ntry.NtryRef = "NOTPROVIDED"
+          Ntry.Sts.Cd = "BOOK"
+          Ntry.BkTxCd.Prtry.Cd = "NOTPROVIDED"
+          Ntry.BkTxCd.Prtry.Issr = "NOTPROVIDED"
+        </PseudoCode>
+      </MappingFormula>
+      <GlobalVariables>
+        <Variable ref="ENTRY_REF_FIXED"/>
+        <Variable ref="ENTRY_STATUS"/>
+        <Variable ref="BANK_TX_CODE_FIXED"/>
+      </GlobalVariables>
+      <General>
+        <Criticality>HIGH</Criticality>
+        <ImpactIfFails>camt.054 schema validation failure — NtryRef, Sts, and BkTxCd are mandatory elements.</ImpactIfFails>
+        <BusinessRationale>Same three mandatory new fields as MT900 — no MT910 equivalent exists for any of them.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <AuditRequirement>Fixed values logged as part of standard camt.054 generation audit.</AuditRequirement>
+        <ComplianceRequirement>camt.054.001.08 XSD requires these three elements.</ComplianceRequirement>
+        <DataPrivacy>Fixed operational values. No PII.</DataPrivacy>
+        <MigrationNote>Identical to MT900 MAPPING_06 — Sts/Cd=BOOK applies equally since MT910 also confirms completed booked entries.</MigrationNote>
+        <CachingStrategy>Not applicable.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 07 ==================== -->
+    <Mapping id="MAPPING_07">
+      <SourceField ref="FIELD_06"/>
+      <TargetField ref="FIELD_17"/>
+      <MappingFormula>
+        <Type>BIC_EXTRACTION_TO_CDTR_AGT</Type>
+        <Expression>if(MT.F52A) CdtrAgt.FinInstnId.BICFI = extractBIC(MT.F52A)</Expression>
+        <PseudoCode>
+          if(MT.F52A) CdtrAgt.FinInstnId.BICFI = extractBIC(MT.F52A)
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>LOW</Criticality>
+        <ImpactIfFails>Ordering institution missing from camt.054 — payment chain incomplete but notification still delivered.</ImpactIfFails>
+        <BusinessRationale>MT910 field :52A: identifies the institution that sent the funds resulting in this credit — maps to CdtrAgt (not DbtrAgt, as used in the MT900 mapping) since this is a credit notification.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <AuditRequirement>Ordering institution BIC logged when present.</AuditRequirement>
+        <ComplianceRequirement>Institutional sanctions screening if BIC present.</ComplianceRequirement>
+        <DataPrivacy>BIC is public identifier. No PII.</DataPrivacy>
+        <MigrationNote>KEY DIFFERENCE from MT900: target path uses RltdAgts/CdtrAgt (not DbtrAgt) — semantically correct for a credit notification where :52A: represents the crediting counterpart institution.</MigrationNote>
+        <CachingStrategy>Not applicable.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 08 ==================== -->
+    <Mapping id="MAPPING_08">
+      <SourceField ref="FIELD_07"/>
+      <TargetField ref="FIELD_18"/>
+      <MappingFormula>
+        <Type>DIRECT_PRESERVATION_TO_ADDTL_TX_INF</Type>
+        <Expression>if(MT.F72) AddtlTxInf = MT.F72.truncate(500)</Expression>
+        <PseudoCode>
+          if(MT.F72) AddtlTxInf = MT.F72.truncate(500)
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>LOW</Criticality>
+        <ImpactIfFails>Loss of supplemental information — notification still delivered.</ImpactIfFails>
+        <BusinessRationale>Same as MT900 MAPPING_08 — full content preservation to AddtlTxInf.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <AuditRequirement>Full :72: content preserved in camt.054 for audit completeness.</AuditRequirement>
+        <ComplianceRequirement>AML content screening per bank policy.</ComplianceRequirement>
+        <DataPrivacy>May contain payment narrative with PII references.</DataPrivacy>
+        <MigrationNote>Identical to MT900 MAPPING_08.</MigrationNote>
+        <CachingStrategy>Not applicable.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 09 ==================== -->
+    <Mapping id="MAPPING_09">
+      <SourceField ref="FIELD_04"/>
+      <TargetField ref="FIELD_10"/>
+      <MappingFormula>
+        <Type>DATETIME_WITH_OFFSET_CONVERSION</Type>
+        <Expression>if(MT.F13D) BookgDt.DtTm = parseDateTimeOffset(MT.F13D, CENTURY_CUTOFF_YEAR)</Expression>
+        <PseudoCode>
+          if(MT.F13D) BookgDt.DtTm = parseDateTimeOffset(MT.F13D, CENTURY_CUTOFF_YEAR)
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>LOW</Criticality>
+        <ImpactIfFails>Booking timestamp absent from camt.054. Optional field — notification still valid.</ImpactIfFails>
+        <BusinessRationale>Same as MT900 MAPPING_09 — optional precise booking timestamp.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <AuditRequirement>Booking timestamp logged when present.</AuditRequirement>
+        <ComplianceRequirement>Same BoA guideline as MT900 — booking date mandatory when status=BOOK and available.</ComplianceRequirement>
+        <DataPrivacy>Operational timestamp. No PII.</DataPrivacy>
+        <MigrationNote>Identical parsing logic to MT900 MAPPING_09.</MigrationNote>
+        <CachingStrategy>Not applicable.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 10 ==================== -->
+    <!-- ENRICHMENT: :50K:/:56A: had no coverage at all — standard optional
+         MT910 fields, added to broaden real-world message coverage. -->
+    <Mapping id="MAPPING_10">
+      <SourceField ref="FIELD_08"/>
+      <TargetField ref="FIELD_19"/>
+      <MappingFormula>
+        <Type>DIRECT_COPY</Type>
+        <Expression>if(MT.F50K) Cdtr.Nm = firstLine(MT.F50K)</Expression>
+        <PseudoCode>
+          if(MT.F50K) Cdtr.Nm = firstLine(MT.F50K)
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>LOW</Criticality>
+        <ImpactIfFails>Ordering customer name missing from camt.054 — notification still delivered.</ImpactIfFails>
+        <BusinessRationale>MT910 field :50K: identifies the customer that originated the underlying payment being confirmed as credited.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <AuditRequirement>Ordering customer name logged when present.</AuditRequirement>
+        <ComplianceRequirement>None specific — informational field.</ComplianceRequirement>
+        <DataPrivacy>Customer name is PII — handle per data protection policy.</DataPrivacy>
+        <MigrationNote>Uses Cdtr (not Dbtr) to stay consistent with MAPPING_07's CdtrAgt convention for the same underlying counterpart.</MigrationNote>
+        <CachingStrategy>Not applicable.</CachingStrategy>
+      </General>
+    </Mapping>
+
+    <!-- ==================== MAPPING 11 ==================== -->
+    <Mapping id="MAPPING_11">
+      <SourceField ref="FIELD_09"/>
+      <TargetField ref="FIELD_20"/>
+      <MappingFormula>
+        <Type>BIC_EXTRACTION</Type>
+        <Expression>if(MT.F56A) IntrmyAgt1.FinInstnId.BICFI = extractBIC(MT.F56A)</Expression>
+        <PseudoCode>
+          if(MT.F56A) IntrmyAgt1.FinInstnId.BICFI = extractBIC(MT.F56A)
+        </PseudoCode>
+      </MappingFormula>
+      <General>
+        <Criticality>LOW</Criticality>
+        <ImpactIfFails>Intermediary institution missing from camt.054 — notification still delivered.</ImpactIfFails>
+        <BusinessRationale>MT910 field :56A: identifies an intermediary bank in the underlying interbank transfer chain.</BusinessRationale>
+        <PerformanceImpact>NEGLIGIBLE</PerformanceImpact>
+        <AuditRequirement>Intermediary BIC logged when present.</AuditRequirement>
+        <ComplianceRequirement>Institutional sanctions screening if BIC present.</ComplianceRequirement>
+        <DataPrivacy>BIC is public identifier. No PII.</DataPrivacy>
+        <MigrationNote>Uses IntrmyAgt1, a directionally-neutral ISO 20022 element name, so no Dbtr/Cdtr-side ambiguity applies here.</MigrationNote>
+        <CachingStrategy>Not applicable.</CachingStrategy>
+      </General>
+    </Mapping>
+
+  </FieldMappings>
+
+</MessageMapping>
