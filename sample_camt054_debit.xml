@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.054.001.08">
+  <BkToCstmrDbtCdtNtfctn>
+    <GrpHdr>
+      <MsgId>DBT20260718001</MsgId>
+      <CreDtTm>2026-07-18T12:00:00Z</CreDtTm>
+    </GrpHdr>
+    <Ntfctn>
+      <Id>DBT20260718001</Id>
+      <Acct>
+        <Id>
+          <IBAN>FR7630006000011234567890189</IBAN>
+        </Id>
+        <Ccy>EUR</Ccy>
+      </Acct>
+      <Ntry>
+        <NtryRef>NOTPROVIDED</NtryRef>
+        <Amt Ccy="EUR">32000.00</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>
+          <Cd>BOOK</Cd>
+        </Sts>
+        <ValDt>
+          <Dt>2026-07-18</Dt>
+        </ValDt>
+        <BkTxCd>
+          <Prtry>
+            <Cd>NOTPROVIDED</Cd>
+            <Issr>NOTPROVIDED</Issr>
+          </Prtry>
+        </BkTxCd>
+        <NtryDtls>
+          <TxDtls>
+            <Refs>
+              <InstrId>TRXREF20260718001</InstrId>
+              <EndToEndId>TRXREF20260718001</EndToEndId>
+            </Refs>
+            <Amt Ccy="EUR">32000.00</Amt>
+            <CdtDbtInd>DBIT</CdtDbtInd>
+            <RltdDts>
+              <IntrBkSttlmDt>2026-07-18</IntrBkSttlmDt>
+            </RltdDts>
+            <RltdAgts>
+              <DbtrAgt>
+                <FinInstnId>
+                  <BICFI>BNPAFRPPXXX</BICFI>
+                </FinInstnId>
+              </DbtrAgt>
+            </RltdAgts>
+            <AddtlTxInf>/EREF/TRXREF20260718001/REMI/Payment debit confirmation</AddtlTxInf>
+          </TxDtls>
+        </NtryDtls>
+      </Ntry>
+    </Ntfctn>
+  </BkToCstmrDbtCdtNtfctn>
+</Document>

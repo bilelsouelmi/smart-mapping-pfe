@@ -97,11 +97,12 @@ const AuditLogPage = () => {
               No audit entries match this filter yet.
             </div>
           ) : (
+            <div style={{ maxHeight: '65vh', overflowY: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
                   {['When', 'User', 'Action', 'Entity', 'Details'].map(h => (
-                    <th key={h} style={{ textAlign: 'left', padding: '0.85rem 1rem', color: '#6b7280', fontSize: '0.78rem', textTransform: 'uppercase' }}>{h}</th>
+                    <th key={h} style={{ textAlign: 'left', padding: '0.85rem 1rem', color: '#6b7280', fontSize: '0.78rem', textTransform: 'uppercase', position: 'sticky', top: 0, background: '#1a1a2e' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -134,6 +135,7 @@ const AuditLogPage = () => {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       </motion.div>

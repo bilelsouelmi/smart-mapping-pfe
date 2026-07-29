@@ -39,6 +39,12 @@ class MessageDescriptionElement(Base):
     description = Column(Text, nullable=True)
     example_value = Column(String(200), nullable=True)
     position = Column(Integer, default=0)
+    # Opts this field into a live Reference Data lookup instead of a fixed
+    # pattern/enum (e.g. "ISO_CURRENCY", "COUNTRY") — copied onto the
+    # generated ValidationRule by import_rules_from_md, and checked by
+    # _validate_field the same way the hardcoded :71A: Charge Code check
+    # already works, just generic instead of tag-specific.
+    reference_category = Column(String(50), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

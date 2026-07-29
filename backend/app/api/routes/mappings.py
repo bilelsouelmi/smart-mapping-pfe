@@ -6,10 +6,11 @@ import logging
 from app.core.deps import get_current_user
 from app.models.user import User
 from app.database import get_db
-from app.models.mapping import Mapping, MappingElement
+from app.models.mapping import Mapping, MappingElement, MappingStatus
 from app.models.message_description import MessageDescription
 from app.models.message_description_element import MessageDescriptionElement
 from app.models.mapping_formula import MappingFormula
+from app.services.audit_service import log_action
 from app.schemas.mapping import (
     MappingCreate,
     MappingUpdate,
@@ -81,7 +82,17 @@ def create_mapping(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
             detail=f"MessageDescription {mapping.message_description_id} not found")
 
-    db_mapping = Mapping(**mapping.model_dump())
+    mapping_data = mapping.model_dump()
+    # Maker-checker, same reasoning as MessageDescription approval: a
+    # mapping drives real Transforms, so it shouldn't be usable until
+    # someone has actually reviewed its formulas. An admin's own creation
+    # can go straight to active (self-approval, same carve-out MD approval
+    # uses) — anyone else's always starts in draft regardless of what
+    # status they send, and needs a separate admin approval afterward.
+    if not current_user.is_admin:
+        mapping_data['status'] = MappingStatus.DRAFT
+
+    db_mapping = Mapping(**mapping_data)
     db.add(db_mapping)
     db.commit()
     db.refresh(db_mapping)
@@ -102,11 +113,33 @@ def update_mapping(
             detail=f"Mapping {mapping_id} not found")
 
     update_data = mapping.model_dump(exclude_unset=True)
+
+    # Same maker-checker gate as creation: activating a mapping (draft/
+    # inactive -> active) needs an admin, since that's the point where it
+    # becomes usable for real Transforms (see the status check in
+    # transform_with_mapping). Any other field a non-admin can already
+    # touch freely.
+    becoming_active = update_data.get('status') == MappingStatus.ACTIVE and db_mapping.status != MappingStatus.ACTIVE
+    if becoming_active and not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only an administrator can activate a Mapping."
+        )
+
     for field, value in update_data.items():
         setattr(db_mapping, field, value)
 
     db.commit()
     db.refresh(db_mapping)
+
+    if becoming_active:
+        log_action(
+            db, current_user, action="approve", entity_type="Mapping",
+            entity_id=db_mapping.id,
+            details=f"Activated mapping \"{db_mapping.name}\" ({db_mapping.source} → {db_mapping.target})"
+        )
+        db.commit()
+
     return db_mapping
 
 

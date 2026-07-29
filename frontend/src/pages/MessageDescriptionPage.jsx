@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'react-toastify';
-import { ChevronDown, ChevronRight, Plus, Edit2, Trash2, RefreshCw, FileText, Layers, X, Check, Upload, Shield, KeyRound, ArrowLeft } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus, Edit2, Trash2, RefreshCw, FileText, Layers, X, Check, Upload, Shield, KeyRound, ArrowLeft, Clock } from 'lucide-react';
 import Layout from '../components/Layout';
 import WorkflowSteps from '../components/WorkflowSteps';
 import { useAuth } from '../contexts/AuthContext';
@@ -98,6 +98,29 @@ const MessageDescriptionPage = () => {
     };
     fetchApproved();
   }, [selectedMD]);
+
+  // A non-admin proposer has no other way to find their own submission
+  // again once they've navigated away — the pending-approvals list above
+  // is admin-only (it's a review queue, not a "my submissions" view), so
+  // after uploading and generating an MD, a regular user could lose track
+  // of it entirely while it sits waiting for an admin. This finds their
+  // own most recent submission (pending or approved) regardless of role.
+  const [myLastRequest, setMyLastRequest] = useState(null);
+
+  useEffect(() => {
+    if (selectedMD || !user?.id) return;
+    const fetchMyLast = async () => {
+      try {
+        const r = await axios.get(`${API}/message-descriptions/`);
+        const mine = (r.data || []).filter(md => md.user_id === user.id);
+        mine.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        setMyLastRequest(mine[0] || null);
+      } catch (e) {
+        console.error(e);
+      }
+    };
+    fetchMyLast();
+  }, [selectedMD, user?.id]);
 
   // Restore state from sessionStorage on mount
   useEffect(() => {
@@ -261,15 +284,20 @@ const MessageDescriptionPage = () => {
     } finally { setRequestingAccess(false); }
   };
 
-  const handleSetAsStandard = async () => {
+  // Regenerates validation_rules from the CURRENT elements (including any
+  // Reference Category tag) without touching the element tree itself —
+  // the counterpart to "Generate MD", which also regenerates rules but
+  // only as a side effect of first wiping and rebuilding every element
+  // from the raw parsed file (losing manual edits like a tag set here).
+  // Use this after editing an element, not Generate MD.
+  const handleSyncValidationRules = async () => {
     if (!selectedMD) return;
-    if (!window.confirm(`Set ${selectedMD.mt_type || selectedMD.file_name} as the standard reference for validation?`)) return;
     setSettingStandard(true);
     try {
       const r = await axios.post(`${API}/validation/validation-rules/import-from-md/${selectedMD.id}`);
-      toast.success(r.data.message);
+      toast.success(r.data.message || 'Validation rules synced');
     } catch (e) {
-      toast.error(e.response?.data?.detail || 'Failed to set as standard');
+      toast.error(e.response?.data?.detail || 'Failed to sync validation rules');
     } finally { setSettingStandard(false); }
   };
 
@@ -373,7 +401,7 @@ const MessageDescriptionPage = () => {
                 <div style={{ color: '#f59e0b', fontWeight: '700', fontSize: '0.95rem', marginBottom: '1rem' }}>
                   🔔 {pendingList.length} pending approval{pendingList.length > 1 ? 's' : ''}
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '50vh', overflowY: 'auto' }}>
                   <AnimatePresence>
                     {pendingList.map((md, i) => (
                       <motion.div key={md.id}
@@ -437,7 +465,7 @@ const MessageDescriptionPage = () => {
                 <div style={{ color: '#10b981', fontWeight: '700', fontSize: '0.95rem', marginBottom: '1rem' }}>
                   ✅ {approvedList.length} approved reference{approvedList.length > 1 ? 's' : ''}
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '50vh', overflowY: 'auto' }}>
                   {approvedList.map((md, i) => (
                     <motion.div key={md.id}
                       initial={{ opacity: 0, x: -10 }}
@@ -512,6 +540,40 @@ const MessageDescriptionPage = () => {
                   )}
                 </div>
               </GlassCard>
+
+              {/* "My last request" — lets the proposer jump straight back
+                  to their own most recent submission (pending or approved)
+                  instead of having no way to find it again once they've
+                  navigated away from the confirmation they saw right after
+                  uploading. */}
+              {myLastRequest && (
+                <div style={{ textAlign: 'center', marginTop: '1rem' }}>
+                  <button
+                    onClick={() => setSelectedMD(myLastRequest)}
+                    style={{
+                      background: 'rgba(255,255,255,0.04)',
+                      border: '1px solid rgba(255,255,255,0.12)',
+                      borderRadius: '10px',
+                      padding: '0.6rem 1.25rem',
+                      color: '#d1d5db',
+                      fontSize: '0.85rem',
+                      fontWeight: '600',
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.6rem'
+                    }}
+                  >
+                    {myLastRequest.approved === true
+                      ? <Check size={14} color="#10b981" />
+                      : <Clock size={14} color="#f59e0b" />}
+                    View my last request — "{myLastRequest.file_name}"
+                    <span style={{ color: myLastRequest.approved === true ? '#10b981' : '#f59e0b', fontWeight: '700' }}>
+                      {myLastRequest.approved === true ? 'approved' : 'pending approval'}
+                    </span>
+                  </button>
+                </div>
+              )}
             </motion.div>
           )}
 
@@ -591,8 +653,8 @@ const MessageDescriptionPage = () => {
                         {selectedMD.approved && selectedMD.approved_by_username && (
                           <> · Approved by <strong>{selectedMD.approved_by_username}</strong></>
                         )}
-                        {!selectedMD.approved && user?.username === selectedMD.proposed_by_username && (
-                          <span style={{ color: '#f59e0b' }}> — you proposed this, a different user must approve it</span>
+                        {!selectedMD.approved && !user?.is_admin && user?.username === selectedMD.proposed_by_username && (
+                          <span style={{ color: '#f59e0b' }}> — you proposed this, an admin must approve it</span>
                         )}
                       </div>
                     )}
@@ -607,29 +669,49 @@ const MessageDescriptionPage = () => {
                       onClick={handleGenerate}
                       disabled={importing}
                     />
+                    {/* Sync Validation Rules — regenerates rules from the
+                        elements as they are NOW (picks up any Reference
+                        Category tag) without wiping/rebuilding the tree,
+                        unlike Generate MD. Click after editing an element. */}
+                    {elements.length > 0 && (
+                      <ActionBtn
+                        icon={<Shield size={14} />}
+                        label={settingStandard ? 'Syncing...' : 'Sync Validation Rules'}
+                        color="#a78bfa"
+                        onClick={handleSyncValidationRules}
+                        disabled={settingStandard}
+                      />
+                    )}
                     {/* Approve / Reject — the explicit save-or-discard gate:
                         elements are already persisted the moment Generate MD
                         runs, so "reject" doesn't prevent a DB write, it
                         undoes one — deleting the MD and its elements so
                         nothing unapproved lingers as a selectable reference
                         elsewhere (New Mapping, Validate, Generate Elements). */}
-                    {elements.length > 0 && !selectedMD.approved && (
-                      <>
-                        <ActionBtn
-                          icon={<Check size={14} />}
-                          label={approving ? 'Working...' : 'Approve'}
-                          color="#10b981"
-                          onClick={handleApprove}
-                          disabled={approving}
-                        />
-                        <ActionBtn
-                          icon={<X size={14} />}
-                          label={approving ? 'Working...' : 'Reject'}
-                          color="#ef4444"
-                          onClick={handleReject}
-                          disabled={approving}
-                        />
-                      </>
+                    {/* Approve is admin-only (maker-checker, enforced server-side
+                        too) — showing it to anyone else just means a click
+                        that always 403s. Reject/discard is available to the
+                        proposer themselves as well as an admin (see the
+                        matching ownership check in delete_message_description);
+                        anyone else viewing someone else's pending draft gets
+                        neither button, since they have no rights over it. */}
+                    {elements.length > 0 && !selectedMD.approved && user?.is_admin && (
+                      <ActionBtn
+                        icon={<Check size={14} />}
+                        label={approving ? 'Working...' : 'Approve'}
+                        color="#10b981"
+                        onClick={handleApprove}
+                        disabled={approving}
+                      />
+                    )}
+                    {elements.length > 0 && !selectedMD.approved && (user?.is_admin || user?.id === selectedMD.user_id) && (
+                      <ActionBtn
+                        icon={<X size={14} />}
+                        label={approving ? 'Working...' : 'Reject'}
+                        color="#ef4444"
+                        onClick={handleReject}
+                        disabled={approving}
+                      />
                     )}
                     {/* Delete — for an MD already approved. Approve/Reject
                         above only appear pre-approval (Reject IS the
@@ -930,7 +1012,13 @@ const ElementModal = ({ mode, element, onSave, onClose }) => {
     mandatory_separator: element?.mandatory_separator ?? false,
     description: element?.description || '',
     example_value: element?.example_value || '',
+    reference_category: element?.reference_category || '',
   });
+  const [refCategories, setRefCategories] = useState([]);
+
+  useEffect(() => {
+    axios.get(`${API}/reference-data/categories`).then(r => setRefCategories(r.data)).catch(() => {});
+  }, []);
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
@@ -1001,6 +1089,12 @@ const ElementModal = ({ mode, element, onSave, onClose }) => {
           </FormField>
           <FormField label="Field Tag">
             <input value={form.field_tag} onChange={e => set('field_tag', e.target.value)} style={inputStyle} placeholder=":20:" />
+          </FormField>
+          <FormField label="Reference Category">
+            <select value={form.reference_category} onChange={e => set('reference_category', e.target.value)} style={selectStyle}>
+              <option value="" style={{ background: '#16213e' }}>— None —</option>
+              {refCategories.map(c => <option key={c} value={c} style={{ background: '#16213e' }}>{c}</option>)}
+            </select>
           </FormField>
           <FormField label="Mandatory Separator">
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', paddingTop: '0.5rem' }}>

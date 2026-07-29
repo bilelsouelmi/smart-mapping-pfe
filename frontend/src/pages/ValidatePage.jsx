@@ -304,9 +304,11 @@ Please select the correct reference standard for this file.`);
                       <div style={{ color: '#ef4444', fontWeight: '700', marginBottom: '0.75rem', fontSize: '0.95rem' }}>
                         ❌ Errors ({result.errors.length})
                       </div>
-                      {Object.entries(groupByBlock(result.errors)).map(([block, items]) => (
-                        <BlockGroup key={block} block={block} items={items} type="error" />
-                      ))}
+                      <div style={{ maxHeight: '40vh', overflowY: 'auto' }}>
+                        {Object.entries(groupByBlock(result.errors)).map(([block, items]) => (
+                          <BlockGroup key={block} block={block} items={items} type="error" />
+                        ))}
+                      </div>
                     </div>
                   )}
 
@@ -315,17 +317,19 @@ Please select the correct reference standard for this file.`);
                       <div style={{ color: '#f59e0b', fontWeight: '700', marginBottom: '0.75rem', fontSize: '0.95rem' }}>
                         ⚠️ Warnings ({result.warnings.length})
                       </div>
-                      {result.warnings.map((w, i) => (
-                        <div key={i} style={{
-                          padding: '8px 12px', background: 'rgba(245,158,11,0.08)',
-                          border: '1px solid rgba(245,158,11,0.2)', borderRadius: '6px',
-                          marginBottom: '4px', fontSize: '13px'
-                        }}>
-                          <span style={{ color: '#f59e0b', fontFamily: 'monospace', marginRight: '8px' }}>{w.field}</span>
-                          <span style={{ color: '#9ca3af' }}>{w.message}</span>
-                          {w.value && <span style={{ color: '#a5f3fc', marginLeft: '8px', fontFamily: 'monospace' }}>= {w.value}</span>}
-                        </div>
-                      ))}
+                      <div style={{ maxHeight: '40vh', overflowY: 'auto' }}>
+                        {result.warnings.map((w, i) => (
+                          <div key={i} style={{
+                            padding: '8px 12px', background: 'rgba(245,158,11,0.08)',
+                            border: '1px solid rgba(245,158,11,0.2)', borderRadius: '6px',
+                            marginBottom: '4px', fontSize: '13px'
+                          }}>
+                            <span style={{ color: '#f59e0b', fontFamily: 'monospace', marginRight: '8px' }}>{w.field}</span>
+                            <span style={{ color: '#9ca3af' }}>{w.message}</span>
+                            {w.value && <span style={{ color: '#a5f3fc', marginLeft: '8px', fontFamily: 'monospace' }}>= {w.value}</span>}
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
 
@@ -336,6 +340,20 @@ Please select the correct reference standard for this file.`);
                       ))}
                     </CollapsibleSection>
                   )}
+
+                  {/* Closing action right where you're actually looking,
+                      instead of only the "New File" button back up near the
+                      upload zone — same reset, just reachable from the
+                      results themselves. */}
+                  <div style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid rgba(255,255,255,0.08)', textAlign: 'center' }}>
+                    <button onClick={handleNewFile} style={{
+                      padding: '0.75rem 1.5rem',
+                      background: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.3)',
+                      borderRadius: '8px', color: '#6ee7b7', fontWeight: '600', fontSize: '0.9rem', cursor: 'pointer'
+                    }}>
+                      ✅ Done — Start New Validation
+                    </button>
+                  </div>
                 </GlassCard>
               </motion.div>
             )}
@@ -406,7 +424,7 @@ const CollapsibleSection = ({ title, color, children }) => {
         {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
         {title}
       </button>
-      {expanded && <div>{children}</div>}
+      {expanded && <div style={{ maxHeight: '40vh', overflowY: 'auto' }}>{children}</div>}
     </div>
   );
 };

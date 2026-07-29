@@ -116,23 +116,43 @@ class SWIFTTextParser:
                 raw_tag = tag_elem.text.strip().strip(':')
 
                 # Get FieldName
-                name_elem = field.find('FieldName') or (field.find('ns:FieldName', ns) if ns else None)
+                # NB: "elem_a or elem_b" is wrong for ElementTree elements —
+                # Element.__bool__() reflects child COUNT, not text content,
+                # so a real leaf element like <FieldName>Foo</FieldName> (no
+                # child elements) is falsy and always fell through to the
+                # `or` branch. Since every mapping file in this project has
+                # no XML namespace, that branch is always None too — so
+                # DataType/FieldName/Format/Mandatory/MaxLength were silently
+                # discarded for every field, of every MT type, on every .txt
+                # upload (block_type was never 'map', so :32A:/:60F:/:33B:
+                # etc. never decomposed into Date/Currency/Amount sub_fields).
+                name_elem = field.find('FieldName')
+                if name_elem is None and ns:
+                    name_elem = field.find('ns:FieldName', ns)
                 field_name = name_elem.text.strip() if name_elem is not None and name_elem.text else raw_tag
 
                 # Get DataType
-                type_elem = field.find('DataType') or (field.find('ns:DataType', ns) if ns else None)
+                type_elem = field.find('DataType')
+                if type_elem is None and ns:
+                    type_elem = field.find('ns:DataType', ns)
                 data_type = type_elem.text.strip().upper() if type_elem is not None and type_elem.text else 'STRING'
 
                 # Get Format
-                format_elem = field.find('Format') or (field.find('ns:Format', ns) if ns else None)
+                format_elem = field.find('Format')
+                if format_elem is None and ns:
+                    format_elem = field.find('ns:Format', ns)
                 format_val = format_elem.text.strip() if format_elem is not None and format_elem.text else '35x'
 
                 # Get Mandatory
-                mandatory_elem = field.find('Mandatory') or (field.find('ns:Mandatory', ns) if ns else None)
+                mandatory_elem = field.find('Mandatory')
+                if mandatory_elem is None and ns:
+                    mandatory_elem = field.find('ns:Mandatory', ns)
                 mandatory = mandatory_elem.text.strip().lower() == 'true' if mandatory_elem is not None and mandatory_elem.text else False
 
                 # Get MaxLength
-                maxlen_elem = field.find('MaxLength') or (field.find('ns:MaxLength', ns) if ns else None)
+                maxlen_elem = field.find('MaxLength')
+                if maxlen_elem is None and ns:
+                    maxlen_elem = field.find('ns:MaxLength', ns)
                 max_length = maxlen_elem.text.strip() if maxlen_elem is not None and maxlen_elem.text else None
 
                 # Determine block type
@@ -141,7 +161,9 @@ class SWIFTTextParser:
                 # Get sub-field components if COMPOSITE
                 sub_fields = {}
                 if block_type == 'map':
-                    components_elem = field.find('Components') or (field.find('ns:Components', ns) if ns else None)
+                    components_elem = field.find('Components')
+                    if components_elem is None and ns:
+                        components_elem = field.find('ns:Components', ns)
                     if components_elem is not None:
                         comp_list = components_elem.findall('Component')
                         if not comp_list and ns:

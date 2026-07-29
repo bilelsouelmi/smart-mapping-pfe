@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Play, Plus, Trash2, Edit2, ArrowRight, FolderOpen, Globe, Wifi,
-         CheckCircle, XCircle, Clock, Zap, RefreshCw } from 'lucide-react';
+         CheckCircle, XCircle, Clock, Zap, RefreshCw, AlertTriangle, Ban } from 'lucide-react';
 import Layout from '../components/Layout';
 import API_BASE_URL from '../config/api';
 
@@ -23,8 +23,12 @@ const ConsommationPage = () => {
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState({});
   const [results, setResults] = useState({});
+  const [deliveryRetries, setDeliveryRetries] = useState([]);
+  const [retryStatusFilter, setRetryStatusFilter] = useState('pending');
+  const [retryBusy, setRetryBusy] = useState({});
 
   useEffect(() => { fetchData(); }, []);
+  useEffect(() => { fetchDeliveryRetries(retryStatusFilter); }, [retryStatusFilter]);
 
   const fetchData = async () => {
     try {
@@ -37,6 +41,40 @@ const ConsommationPage = () => {
       setMappings(mapRes.data);
       setPipelines(pipRes.data);
     } catch (e) { console.error(e); }
+  };
+
+  const fetchDeliveryRetries = async (filter = retryStatusFilter) => {
+    try {
+      const params = filter === 'all' ? {} : { status_filter: filter };
+      const r = await axios.get(`${API}/delivery-retries/`, { params });
+      setDeliveryRetries(r.data);
+    } catch (e) { console.error(e); }
+  };
+
+  const handleRetryDelivery = async (id) => {
+    setRetryBusy(prev => ({ ...prev, [id]: true }));
+    try {
+      await axios.post(`${API}/delivery-retries/${id}/retry`);
+      fetchDeliveryRetries();
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Retry failed');
+      fetchDeliveryRetries();
+    } finally {
+      setRetryBusy(prev => ({ ...prev, [id]: false }));
+    }
+  };
+
+  const handleAbandonDelivery = async (id) => {
+    if (!window.confirm('Give up on redelivering this? It will be removed from the pending queue.')) return;
+    setRetryBusy(prev => ({ ...prev, [id]: true }));
+    try {
+      await axios.post(`${API}/delivery-retries/${id}/abandon`);
+      fetchDeliveryRetries();
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Abandon failed');
+    } finally {
+      setRetryBusy(prev => ({ ...prev, [id]: false }));
+    }
   };
 
   const openCreateForm = () => {
@@ -161,7 +199,7 @@ const ConsommationPage = () => {
               </div>
             </GlassCard>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', maxHeight: '70vh', overflowY: 'auto' }}>
               {pipelines.map(pipeline => {
                 const cfgIn = { name: pipeline.config_in_name, transport_type: pipeline.config_in_type };
                 const mapping = mappings.find(m => m.id === pipeline.mapping_id) || { name: pipeline.mapping_name };
@@ -319,6 +357,99 @@ const ConsommationPage = () => {
                       )}
                     </GlassCard>
                   </motion.div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Pending Delivery Retries — a pipeline run whose transform
+              succeeded but whose Config OUT delivery failed. Retrying
+              resends the SAME already-transformed output (see backend's
+              _deliver_to_config_out), never re-consumes/re-transforms. */}
+          <div style={{ marginTop: '2.5rem', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
+            <h2 style={{ fontSize: '1.4rem', fontWeight: '700', margin: 0, color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <AlertTriangle size={22} /> Pending Delivery Retries
+            </h2>
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+              <select value={retryStatusFilter} onChange={e => setRetryStatusFilter(e.target.value)} style={{ ...inputStyle, width: 'auto', padding: '9px 14px' }}>
+                <option value="pending">Pending (needs action)</option>
+                <option value="delivered">Delivered</option>
+                <option value="abandoned">Abandoned</option>
+                <option value="all">All</option>
+              </select>
+              <button onClick={() => fetchDeliveryRetries()} style={{
+                display: 'flex', alignItems: 'center', gap: '8px',
+                padding: '10px 18px', background: 'rgba(167,139,250,0.15)',
+                border: '1px solid rgba(167,139,250,0.3)', borderRadius: '10px',
+                color: '#a78bfa', cursor: 'pointer', fontWeight: '600'
+              }}>
+                <RefreshCw size={16} /> Refresh
+              </button>
+            </div>
+          </div>
+
+          {deliveryRetries.length === 0 ? (
+            <GlassCard>
+              <div style={{ textAlign: 'center', padding: '2.5rem', color: '#6b7280' }}>
+                <AlertTriangle size={36} style={{ margin: '0 auto 1rem', opacity: 0.3 }} />
+                {retryStatusFilter === 'pending' ? 'No stuck deliveries right now.' : 'No records match this filter.'}
+              </div>
+            </GlassCard>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {deliveryRetries.map(r => {
+                const Icon = TRANSPORT_ICONS[r.transport_type] || Globe;
+                const color = TRANSPORT_COLORS[r.transport_type] || '#9ca3af';
+                const busy = !!retryBusy[r.id];
+                return (
+                  <GlassCard key={r.id}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+                      <div style={{ flex: 1, minWidth: '260px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                          <Icon size={16} color={color} />
+                          <span style={{ color: 'white', fontWeight: '700' }}>{r.pipeline_name}</span>
+                          <span style={{
+                            padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: '700',
+                            background: `${color}20`, color
+                          }}>{r.transport_type}</span>
+                          <span style={{
+                            padding: '2px 8px', borderRadius: '999px', fontSize: '10px', fontWeight: '700',
+                            background: r.status === 'pending' ? 'rgba(245,158,11,0.15)' : r.status === 'delivered' ? 'rgba(16,185,129,0.15)' : 'rgba(107,114,128,0.15)',
+                            color: r.status === 'pending' ? '#f59e0b' : r.status === 'delivered' ? '#10b981' : '#6b7280'
+                          }}>{r.status}</span>
+                        </div>
+                        <div style={{ color: '#9ca3af', fontSize: '0.82rem', marginBottom: '4px' }}>
+                          Output: <span style={{ color: '#d1d5db' }}>{r.output_filename}</span>
+                        </div>
+                        <div style={{ color: '#ef4444', fontSize: '0.8rem' }}>{r.error_message}</div>
+                        <div style={{ color: '#6b7280', fontSize: '0.72rem', marginTop: '4px' }}>
+                          Attempt {r.attempt_count} · {r.last_attempt_at ? `last tried ${new Date(r.last_attempt_at).toLocaleString()}` : `first failed ${new Date(r.created_at).toLocaleString()}`}
+                        </div>
+                      </div>
+                      {r.status === 'pending' && (
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button onClick={() => handleRetryDelivery(r.id)} disabled={busy} style={{
+                            display: 'flex', alignItems: 'center', gap: '6px',
+                            padding: '8px 16px', background: 'rgba(16,185,129,0.15)',
+                            border: '1px solid rgba(16,185,129,0.3)', borderRadius: '8px',
+                            color: '#10b981', cursor: busy ? 'not-allowed' : 'pointer', fontWeight: '700', fontSize: '0.85rem',
+                            opacity: busy ? 0.6 : 1
+                          }}>
+                            {busy ? <RefreshCw size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <RefreshCw size={14} />} Retry
+                          </button>
+                          <button onClick={() => handleAbandonDelivery(r.id)} disabled={busy} style={{
+                            display: 'flex', alignItems: 'center', gap: '6px',
+                            padding: '8px 16px', background: 'rgba(107,114,128,0.1)',
+                            border: '1px solid rgba(107,114,128,0.3)', borderRadius: '8px',
+                            color: '#9ca3af', cursor: busy ? 'not-allowed' : 'pointer', fontWeight: '700', fontSize: '0.85rem',
+                            opacity: busy ? 0.6 : 1
+                          }}>
+                            <Ban size={14} /> Abandon
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </GlassCard>
                 );
               })}
             </div>

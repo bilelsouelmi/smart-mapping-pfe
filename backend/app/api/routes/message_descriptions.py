@@ -6,6 +6,10 @@ from app.models.user import User
 
 from app.database import get_db
 from app.models.message_description import MessageDescription
+from app.models.mapping import Mapping
+from app.models.pending_transaction import PendingTransactionApproval
+from app.models.config import TransportConfig
+from app.models.config_consommation import ConfigConsommation
 from app.models.notification import Notification
 from app.models.access_request import AccessRequest
 from app.services.audit_service import log_action
@@ -16,6 +20,61 @@ from app.schemas.message_description import (
 )
 
 router = APIRouter()
+
+
+def _detach_mapping_dependents(
+    db: Session, md: MessageDescription, action_verb: str, demote_on_conflict: bool = False
+) -> bool:
+    """Before deleting `md` (which cascades to its Mappings, see the
+    model's cascade="all, delete-orphan"), clears dangling references
+    from other tables that point at those Mapping rows by id but aren't
+    part of that ORM cascade:
+      - PendingTransactionApproval.mapping_id (nullable) — informational
+        only ("which mapping produced this hold"); the compliance record
+        itself must survive, so just the pointer is cleared.
+      - TransportConfig.mapping_id (nullable) — unused convenience
+        metadata (nothing in the codebase reads it), safe to clear.
+      - ConfigConsommation.mapping_id (NOT NULL) — an active pipeline
+        that actually needs the mapping to run. Can't silently clear or
+        delete that out from under the user: either raises 409 (default,
+        for an explicit Reject/Delete action) or, if demote_on_conflict
+        (used when a newer MD is superseding this one on approval),
+        leaves `md` demoted to a pending draft instead and returns False
+        so the new approval never fails over an unrelated old pipeline.
+    Returns True if it's safe for the caller to proceed with db.delete(md).
+    """
+    mapping_ids = [
+        m.id for m in db.query(Mapping.id).filter(
+            Mapping.message_description_id == md.id
+        ).all()
+    ]
+    if not mapping_ids:
+        return True
+
+    blocking_pipelines = db.query(ConfigConsommation.name).filter(
+        ConfigConsommation.mapping_id.in_(mapping_ids)
+    ).all()
+    if blocking_pipelines:
+        if demote_on_conflict:
+            md.approved = None
+            md.approved_by = None
+            return False
+        names = ", ".join(f'"{n}"' for (n,) in blocking_pipelines)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot {action_verb} this Message Description: its mapping is still used by "
+                   f"active pipeline configuration(s) {names}. Remove or reassign "
+                   f"{'those pipelines' if len(blocking_pipelines) > 1 else 'that pipeline'} "
+                   f"first (Pipeline & Transport page)."
+        )
+
+    db.query(PendingTransactionApproval).filter(
+        PendingTransactionApproval.mapping_id.in_(mapping_ids)
+    ).update({PendingTransactionApproval.mapping_id: None}, synchronize_session=False)
+    db.query(TransportConfig).filter(
+        TransportConfig.mapping_id.in_(mapping_ids)
+    ).update({TransportConfig.mapping_id: None}, synchronize_session=False)
+    return True
 
 
 def _consume_access_grant(db: Session, current_user: User, db_message_desc: MessageDescription, action: str) -> None:
@@ -128,8 +187,8 @@ def update_message_description(
     """
     db_message_desc = db.query(MessageDescription).filter(
         MessageDescription.id == message_description_id
-    ).first()
-    
+    ).with_for_update().first()
+
     if not db_message_desc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -140,21 +199,19 @@ def update_message_description(
     update_data = message_desc.model_dump(exclude_unset=True)
 
     # Maker-checker: User = Maker (proposes), Admin = Checker (approves).
-    # Even an Admin cannot approve their own proposal — segregation of
-    # duties is a standard banking control, and self-approval defeats the
-    # entire point of a human review gate (see the whole
-    # _run_transform_prechecks / validate_file_at_path chain this
-    # "approved" flag ultimately guards).
+    # A non-admin's proposal always needs an admin's review. An admin's
+    # OWN proposal can be self-approved, though — unlike the watchlist's
+    # dual-control requirement (which has a dedicated Compliance Officer
+    # role precisely so two DIFFERENT people can always be found), MD
+    # approval is a quality gate on documentation, not a segregation-of-
+    # duties control, and admins are already the platform's ultimate
+    # trusted authority. Requiring a second admin here just deadlocks a
+    # single-admin deployment for no real security benefit.
     if update_data.get("approved") is True:
         if not current_user.is_admin:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only an administrator can approve a Message Description."
-            )
-        if db_message_desc.user_id == current_user.id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You proposed this Message Description — a different admin must approve it (maker-checker)."
             )
         update_data["approved_by"] = current_user.id
 
@@ -174,13 +231,21 @@ def update_message_description(
     # Only one MD can be the approved reference per (mt_type, file_type) —
     # approving a new one must retire the previous reference, or Transform's
     # gate and Validate's rule-lookup can silently pick either one.
+    # Retiring means DELETING the old one outright, not demoting it back to
+    # "pending" — a demoted MD just reappears as a confusing duplicate
+    # pending-approval item (this is exactly what caused two near-identical
+    # MT103 samples to keep flip-flopping between approved/pending as each
+    # was alternately approved).
     if update_data.get("approved") is True:
-        db.query(MessageDescription).filter(
+        superseded = db.query(MessageDescription).filter(
             MessageDescription.id != db_message_desc.id,
             MessageDescription.mt_type == db_message_desc.mt_type,
             MessageDescription.file_type == db_message_desc.file_type,
             MessageDescription.approved == True  # noqa: E712
-        ).update({"approved": None, "approved_by": None})
+        ).all()
+        for old_md in superseded:
+            if _detach_mapping_dependents(db, old_md, "delete", demote_on_conflict=True):
+                db.delete(old_md)
 
         # Close the maker-checker feedback loop: the proposer otherwise
         # never finds out their submission was reviewed, since the
@@ -214,8 +279,8 @@ def delete_message_description(
     """
     db_message_desc = db.query(MessageDescription).filter(
         MessageDescription.id == message_description_id
-    ).first()
-    
+    ).with_for_update().first()
+
     if not db_message_desc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -232,9 +297,16 @@ def delete_message_description(
     # Deleting an APPROVED reference needs the same admin-or-granted-access
     # gate as editing one (see update_message_description) — a pending
     # draft's own proposer can still freely reject/discard their own
-    # unreviewed work, no permission needed.
+    # unreviewed work, no permission needed. But it IS still their own —
+    # without this check, any authenticated user could reject/delete
+    # anyone else's still-pending draft.
     if was_approved and not current_user.is_admin:
         _consume_access_grant(db, current_user, db_message_desc, "delete")
+    elif not was_approved and not current_user.is_admin and db_message_desc.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the proposer or an administrator can reject this Message Description."
+        )
 
     # Notification is only meaningful when someone OTHER than the
     # proposer is the one discarding it — deleting your own draft doesn't
@@ -255,7 +327,9 @@ def delete_message_description(
         details=f"{verb.capitalize()} \"{db_message_desc.file_name}\" ({db_message_desc.mt_type or db_message_desc.file_type})"
     )
 
-    db.delete(db_message_desc)
+    action_verb = "reject" if verb == "rejected" else "delete"
+    if _detach_mapping_dependents(db, db_message_desc, action_verb):
+        db.delete(db_message_desc)
     db.commit()
-    
+
     return None

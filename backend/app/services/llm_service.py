@@ -1,3 +1,4 @@
+import re
 import requests
 import json
 import logging
@@ -5,6 +6,31 @@ from typing import Dict, List, Optional, Any
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Ollama occasionally drops the comma between two adjacent quoted JSON
+# tokens — most often when a string value (e.g. an "example_input" built
+# from real sample data) itself contains a comma, which seems to confuse
+# the model into thinking a separator was already emitted. A valid JSON
+# document never has a bare `"..."` immediately followed by another
+# `"..."` with only whitespace between them (no `:` or `,`), so this
+# substitution is safe to apply generically before giving up on a parse.
+_MISSING_COMMA_RE = re.compile(r'"\s*\n\s*"')
+
+
+def _parse_llm_json(response: str):
+    """json.loads with a fallback repair for the missing-comma glitch above."""
+    try:
+        return json.loads(response)
+    except json.JSONDecodeError as e:
+        repaired = _MISSING_COMMA_RE.sub('",\n"', response)
+        if repaired != response:
+            try:
+                result = json.loads(repaired)
+                logger.warning(f"Auto-repaired malformed JSON from LLM (missing comma): {e}")
+                return result
+            except json.JSONDecodeError:
+                pass
+        raise e
 
 
 class LLMService:
@@ -108,7 +134,7 @@ Return ONLY the JSON, no markdown, no explanation.
             response = response.split("```")[1].split("```")[0].strip()
 
         try:
-            return json.loads(response)
+            return _parse_llm_json(response)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON: {e}")
             logger.error(f"Response was: {response[:500]}")
@@ -182,7 +208,13 @@ IMPORTANT: Return ONLY valid JSON with this exact structure:
 Return ONLY the JSON, no markdown, no explanation.
 """
 
-        response = self.generate(prompt, max_tokens=2500, temperature=0.3)
+        # 2500 was too tight: each mapping entry includes reasoning +
+        # example_input/output, so requests with >~6 target columns got
+        # cut off mid-JSON (num_predict hit before the array closed),
+        # producing an unparseable response and a 500. num_predict is a
+        # cap, not a target, so raising it doesn't slow down shorter
+        # responses.
+        response = self.generate(prompt, max_tokens=6000, temperature=0.3)
 
         response = response.strip()
         if "```json" in response:
@@ -191,7 +223,7 @@ Return ONLY the JSON, no markdown, no explanation.
             response = response.split("```")[1].split("```")[0].strip()
 
         try:
-            return json.loads(response)
+            return _parse_llm_json(response)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON: {e}")
             logger.error(f"Response was: {response[:500]}")
@@ -283,7 +315,7 @@ Return ONLY the JSON object, no markdown, no explanation, no array brackets.
                 elif "```" in response:
                     response = response.split("```")[1].split("```")[0].strip()
 
-                item = json.loads(response)
+                item = _parse_llm_json(response)
                 item["source_field_name"] = field_name
                 all_elements.append(item)
 
@@ -343,7 +375,7 @@ Return ONLY the JSON, no markdown, no explanation.
             response = response.split("```")[1].split("```")[0].strip()
 
         try:
-            return json.loads(response)
+            return _parse_llm_json(response)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse JSON: {e}")
             raise ValueError(f"Invalid JSON response from LLM: {str(e)}")

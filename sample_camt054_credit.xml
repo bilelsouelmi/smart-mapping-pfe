@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.054.001.08">
+  <BkToCstmrDbtCdtNtfctn>
+    <GrpHdr>
+      <MsgId>CDT20260718002</MsgId>
+      <CreDtTm>2026-07-18T13:00:00Z</CreDtTm>
+    </GrpHdr>
+    <Ntfctn>
+      <Id>CDT20260718002</Id>
+      <Acct>
+        <Id>
+          <IBAN>DE75512108001245126199</IBAN>
+        </Id>
+        <Ccy>EUR</Ccy>
+      </Acct>
+      <Ntry>
+        <NtryRef>NOTPROVIDED</NtryRef>
+        <Amt Ccy="EUR">18500.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <Sts>
+          <Cd>BOOK</Cd>
+        </Sts>
+        <ValDt>
+          <Dt>2026-07-18</Dt>
+        </ValDt>
+        <BkTxCd>
+          <Prtry>
+            <Cd>NOTPROVIDED</Cd>
+            <Issr>NOTPROVIDED</Issr>
+          </Prtry>
+        </BkTxCd>
+        <NtryDtls>
+          <TxDtls>
+            <Refs>
+              <InstrId>TRXREF20260718002</InstrId>
+              <EndToEndId>TRXREF20260718002</EndToEndId>
+            </Refs>
+            <Amt Ccy="EUR">18500.00</Amt>
+            <CdtDbtInd>CRDT</CdtDbtInd>
+            <RltdDts>
+              <IntrBkSttlmDt>2026-07-18</IntrBkSttlmDt>
+            </RltdDts>
+            <RltdAgts>
+              <DbtrAgt>
+                <FinInstnId>
+                  <BICFI>DEUTDEFFXXX</BICFI>
+                </FinInstnId>
+              </DbtrAgt>
+              <IntrmyAgt1>
+                <FinInstnId>
+                  <BICFI>BARCGB22XXX</BICFI>
+                </FinInstnId>
+              </IntrmyAgt1>
+            </RltdAgts>
+            <RltdPties>
+              <Cdtr>
+                <Nm>JOHN DOE</Nm>
+              </Cdtr>
+            </RltdPties>
+            <AddtlTxInf>/EREF/TRXREF20260718002/REMI/Payment credit confirmation</AddtlTxInf>
+          </TxDtls>
+        </NtryDtls>
+      </Ntry>
+    </Ntfctn>
+  </BkToCstmrDbtCdtNtfctn>
+</Document>

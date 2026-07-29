@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.009.001.08">
+  <FICdtTrf>
+    <GrpHdr>
+      <MsgId>REF20260718ABC</MsgId>
+      <CreDtTm>2026-07-18T11:00:00</CreDtTm>
+      <NbOfTxs>1</NbOfTxs>
+    </GrpHdr>
+    <CdtTrfTxInf>
+      <PmtId>
+        <EndToEndId>FIT20260718001</EndToEndId>
+        <TxId>REF20260718ABC</TxId>
+      </PmtId>
+      <IntrBkSttlmDt>2026-07-18</IntrBkSttlmDt>
+      <Amt>
+        <InstdAmt Ccy="EUR">750000.00</InstdAmt>
+      </Amt>
+      <InstgAgt>
+        <FinInstnId>
+          <BICFI>BIATTNTTXXX</BICFI>
+        </FinInstnId>
+      </InstgAgt>
+      <PrvsInstgAgt1>
+        <FinInstnId>
+          <BICFI>CORRUSXXX</BICFI>
+        </FinInstnId>
+      </PrvsInstgAgt1>
+      <IntrmyAgt1>
+        <FinInstnId>
+          <BICFI>BNPAFRPPXXX</BICFI>
+        </FinInstnId>
+      </IntrmyAgt1>
+      <CdtrAgt>
+        <FinInstnId>
+          <BICFI>DEUTDEDBXXX</BICFI>
+        </FinInstnId>
+      </CdtrAgt>
+      <InstdAgt>
+        <FinInstnId>
+          <BICFI>INTLDEFFXXX</BICFI>
+        </FinInstnId>
+      </InstdAgt>
+      <Cdtr>
+        <FinInstnId>
+          <BICFI>BARCGB22XXX</BICFI>
+        </FinInstnId>
+      </Cdtr>
+      <InstrForCdtrAgt>
+        <InstrInf>/BNF/COVER PAYMENT FOR MT103 TRF20260718001</InstrInf>
+      </InstrForCdtrAgt>
+    </CdtTrfTxInf>
+  </FICdtTrf>
+</Document>

@@ -4,9 +4,11 @@ import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
-import { Home, FileOutput, LogOut, Sparkles, Layers, Shield, GitMerge, Settings, GitBranch, Users, Bell, Check, ScrollText, X, Trash2 } from 'lucide-react';
+import { Home, FileOutput, LogOut, Sparkles, Layers, Shield, GitMerge, Settings, GitBranch, Users, Bell, Check, ScrollText, X, Trash2, SlidersHorizontal, ShieldAlert, KeyRound, Lock, FileBarChart, Activity, Layers2, Database } from 'lucide-react';
+import { toast } from 'react-toastify';
 import API_BASE_URL from '../config/api';
 import { PENDING_APPROVALS_CHANGED_EVENT } from '../constants/events';
+import PasswordInput from './PasswordInput';
 
 // Shared row renderer for both the core-pipeline and secondary nav
 // sections — same markup, previously duplicated inline for a single list.
@@ -52,6 +54,42 @@ const Layout = ({ children }) => {
   const location = useLocation();
   const [hovered, setHovered] = useState(false);
   const [pendingApprovals, setPendingApprovals] = useState(0);
+  const [showChangePassword, setShowChangePassword] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [changingPassword, setChangingPassword] = useState(false);
+
+  const closeChangePassword = () => {
+    setShowChangePassword(false);
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+  };
+
+  const handleChangePassword = async () => {
+    if (newPassword.length < 8) {
+      toast.error('New password must be at least 8 characters');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast.error("New passwords don't match");
+      return;
+    }
+    setChangingPassword(true);
+    try {
+      await axios.post(`${API_BASE_URL}/api/users/me/change-password`, {
+        current_password: currentPassword,
+        new_password: newPassword,
+      });
+      toast.success('Password changed successfully');
+      closeChangePassword();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Failed to change password');
+    } finally {
+      setChangingPassword(false);
+    }
+  };
 
   const handleLogout = () => {
     logout();
@@ -186,13 +224,29 @@ const Layout = ({ children }) => {
   ];
 
   const secondaryNavItems = [
-    { path: '/config',                icon: Settings,      label: 'Configuration',   color: '#a78bfa' },
-    { path: '/pipeline',              icon: GitBranch,     label: 'Consommation',    color: '#f59e0b' },
+    { path: '/config',                icon: Settings,           label: 'Configuration',     color: '#a78bfa' },
+    { path: '/pipeline',              icon: GitBranch,          label: 'Consommation',      color: '#f59e0b' },
+    { path: '/business-variables',    icon: SlidersHorizontal,  label: 'Business Variables', color: '#06b6d4' },
+    { path: '/reference-data',        icon: Database,           label: 'Reference Data',    color: '#06b6d4' },
+    { path: '/pending-transactions',  icon: Lock,               label: 'Pending Transactions', color: '#f59e0b' },
+    { path: '/batch',                 icon: Layers2,            label: 'Batch Processing',  color: '#f472b6' },
   ];
 
   const adminNavItems = [
     { path: '/admin',      icon: Users,       label: 'User Management', color: '#ef4444' },
     { path: '/audit-log',  icon: ScrollText,  label: 'Audit Log',       color: '#ef4444' },
+  ];
+
+  const complianceNavItems = [
+    { path: '/watchlist',  icon: ShieldAlert, label: 'Watchlist',       color: '#ef4444' },
+  ];
+
+  // Admin OR compliance officer — same gating as the backend's
+  // _require_compliance_access, since this report is compliance's own
+  // deliverable, not an admin-only oversight tool.
+  const reportsNavItems = [
+    { path: '/reports',        icon: FileBarChart, label: 'Regulatory Reports', color: '#ef4444' },
+    { path: '/sla-dashboard',  icon: Activity,      label: 'SLA Dashboard',     color: '#06b6d4' },
   ];
 
   const sidebarWidth = hovered ? '220px' : '64px';
@@ -280,12 +334,12 @@ const Layout = ({ children }) => {
 
           {secondaryNavItems.map((item) => renderNavItem(item, location, hovered))}
 
-          {user?.is_admin && (
-            <>
-              <div style={{ margin: '0.5rem 1rem', borderTop: '1px solid rgba(239,68,68,0.15)' }} />
-              {adminNavItems.map((item) => renderNavItem(item, location, hovered))}
-            </>
+          {(user?.is_admin || user?.is_compliance_officer) && (
+            <div style={{ margin: '0.5rem 1rem', borderTop: '1px solid rgba(239,68,68,0.15)' }} />
           )}
+          {user?.is_admin && adminNavItems.map((item) => renderNavItem(item, location, hovered))}
+          {user?.is_compliance_officer && complianceNavItems.map((item) => renderNavItem(item, location, hovered))}
+          {(user?.is_admin || user?.is_compliance_officer) && reportsNavItems.map((item) => renderNavItem(item, location, hovered))}
         </nav>
 
         <div style={{ padding: '0 8px', position: 'relative' }}>
@@ -416,19 +470,22 @@ const Layout = ({ children }) => {
           borderTop: '1px solid rgba(255,255,255,0.08)',
           display: 'flex', flexDirection: 'column', gap: '6px'
         }}>
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: '0.75rem',
-            padding: '0.6rem 0.85rem',
-            background: 'rgba(255,255,255,0.04)',
-            borderRadius: '10px', overflow: 'hidden'
-          }}>
+          <div
+            onClick={() => setShowChangePassword(true)}
+            title="Change password"
+            style={{
+              display: 'flex', alignItems: 'center', gap: '0.75rem',
+              padding: '0.6rem 0.85rem',
+              background: 'rgba(255,255,255,0.04)',
+              borderRadius: '10px', overflow: 'hidden', cursor: 'pointer'
+            }}>
             <span style={{ fontSize: '1rem', flexShrink: 0 }}>
               {user?.is_admin ? '🛡️' : '👤'}
             </span>
             <motion.div
               animate={{ opacity: hovered ? 1 : 0, x: hovered ? 0 : -8 }}
               transition={{ duration: 0.2 }}
-              style={{ overflow: 'hidden', pointerEvents: 'none' }}
+              style={{ overflow: 'hidden', pointerEvents: 'none', flex: 1 }}
             >
               <div style={{
                 color: 'white', fontWeight: '600', fontSize: '0.85rem',
@@ -444,6 +501,7 @@ const Layout = ({ children }) => {
                 {user?.is_admin ? 'Administrator' : 'User'}
               </div>
             </motion.div>
+            <KeyRound size={14} color="#6b7280" style={{ flexShrink: 0 }} />
           </div>
 
           <motion.button
@@ -469,6 +527,69 @@ const Layout = ({ children }) => {
           </motion.button>
         </div>
       </motion.div>
+
+      {createPortal(
+        <AnimatePresence>
+          {showChangePassword && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              style={{
+                position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                zIndex: 2000, padding: '1rem'
+              }}
+              onClick={e => e.target === e.currentTarget && !changingPassword && closeChangePassword()}>
+              <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+                style={{
+                  background: '#1a1a2e', border: '1px solid rgba(255,255,255,0.1)',
+                  borderRadius: '16px', padding: '2rem', width: '100%', maxWidth: '420px'
+                }}>
+                <h2 style={{ color: 'white', fontWeight: '800', marginBottom: '1.5rem', fontSize: '1.2rem',
+                  display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <KeyRound size={20} color="#06b6d4" /> Change Password
+                </h2>
+
+                <label style={modalLabelStyle}>Current Password</label>
+                <PasswordInput
+                  value={currentPassword}
+                  onChange={e => setCurrentPassword(e.target.value)}
+                  style={modalInputStyle}
+                  autoComplete="current-password"
+                />
+
+                <label style={{ ...modalLabelStyle, marginTop: '1rem' }}>New Password</label>
+                <PasswordInput
+                  value={newPassword}
+                  onChange={e => setNewPassword(e.target.value)}
+                  style={modalInputStyle}
+                  placeholder="Min 8 characters"
+                  autoComplete="new-password"
+                />
+
+                <label style={{ ...modalLabelStyle, marginTop: '1rem' }}>Confirm New Password</label>
+                <PasswordInput
+                  value={confirmPassword}
+                  onChange={e => setConfirmPassword(e.target.value)}
+                  style={modalInputStyle}
+                  autoComplete="new-password"
+                />
+
+                <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '1.5rem' }}>
+                  <button onClick={closeChangePassword} disabled={changingPassword} style={{
+                    padding: '0.6rem 1.2rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.15)',
+                    background: 'none', color: '#9ca3af', cursor: changingPassword ? 'not-allowed' : 'pointer', fontWeight: '600'
+                  }}>Cancel</button>
+                  <button onClick={handleChangePassword} disabled={changingPassword} style={{
+                    padding: '0.6rem 1.2rem', borderRadius: '8px', border: '1px solid rgba(6,182,212,0.3)',
+                    background: 'rgba(6,182,212,0.15)', color: '#06b6d4', cursor: changingPassword ? 'not-allowed' : 'pointer',
+                    fontWeight: '600', opacity: changingPassword ? 0.6 : 1
+                  }}>{changingPassword ? 'Saving...' : 'Save'}</button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>,
+        document.body
+      )}
 
       <motion.main
         animate={{ marginLeft: sidebarWidth }}
@@ -496,6 +617,17 @@ const Layout = ({ children }) => {
       `}</style>
     </div>
   );
+};
+
+const modalLabelStyle = {
+  display: 'block', color: '#9ca3af', fontSize: '0.8rem', fontWeight: '600', marginBottom: '0.4rem'
+};
+
+const modalInputStyle = {
+  background: 'rgba(255,255,255,0.07)',
+  border: '1px solid rgba(255,255,255,0.15)',
+  borderRadius: '8px', color: 'white',
+  padding: '0.5rem 0.75rem', fontSize: '0.85rem',
 };
 
 export default Layout;

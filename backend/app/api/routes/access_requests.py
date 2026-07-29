@@ -118,7 +118,7 @@ def approve_access_request(
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Only an administrator can grant access requests.")
 
-    req = db.query(AccessRequest).filter(AccessRequest.id == request_id).first()
+    req = db.query(AccessRequest).filter(AccessRequest.id == request_id).with_for_update().first()
     if not req:
         raise HTTPException(status_code=404, detail="Request not found")
     if req.status != "pending":
@@ -154,7 +154,7 @@ def deny_access_request(
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="Only an administrator can deny access requests.")
 
-    req = db.query(AccessRequest).filter(AccessRequest.id == request_id).first()
+    req = db.query(AccessRequest).filter(AccessRequest.id == request_id).with_for_update().first()
     if not req:
         raise HTTPException(status_code=404, detail="Request not found")
     if req.status != "pending":

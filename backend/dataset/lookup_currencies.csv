@@ -1,11 +1,155 @@
 currency_code,currency_name,currency_symbol,to_eur_rate,to_usd_rate,decimal_places
-TND,Tunisian Dinar,د.ت,0.304,0.320,3
+AED,UAE Dirham,د.إ,0.258,0.272,2
+AFN,Afghan Afghani,؋,0.0135,0.0142,2
+ALL,Albanian Lek,L,0.0104,0.0109,2
+AMD,Armenian Dram,֏,0.0024,0.0025,2
+ANG,Netherlands Antillean Guilder,ƒ,0.53,0.56,2
+AOA,Angolan Kwanza,Kz,0.0011,0.0012,2
+ARS,Argentine Peso,$,0.001,0.00105,2
+AUD,Australian Dollar,A$,0.61,0.64,2
+AWG,Aruban Florin,ƒ,0.53,0.56,2
+AZN,Azerbaijani Manat,₼,0.56,0.59,2
+BAM,Bosnia-Herzegovina Convertible Mark,KM,0.51,0.535,2
+BBD,Barbadian Dollar,$,0.475,0.50,2
+BDT,Bangladeshi Taka,৳,0.0087,0.0091,2
+BGN,Bulgarian Lev,лв,0.51,0.535,2
+BHD,Bahraini Dinar,.د.ب,2.51,2.65,3
+BIF,Burundian Franc,FBu,0.00033,0.00035,0
+BMD,Bermudian Dollar,$,0.95,1.00,2
+BND,Brunei Dollar,$,0.70,0.735,2
+BOB,Bolivian Boliviano,Bs.,0.137,0.145,2
+BRL,Brazilian Real,R$,0.165,0.174,2
+BSD,Bahamian Dollar,$,0.95,1.00,2
+BTN,Bhutanese Ngultrum,Nu.,,,2
+BWP,Botswana Pula,P,0.069,0.073,2
+BYN,Belarusian Ruble,Br,0.29,0.305,2
+BZD,Belize Dollar,BZ$,0.475,0.50,2
+CAD,Canadian Dollar,C$,0.69,0.725,2
+CDF,Congolese Franc,FC,0.00033,0.00035,2
+CHF,Swiss Franc,Fr.,1.05,1.10,2
+CLP,Chilean Peso,$,0.001,0.00105,0
+CNY,Chinese Yuan,¥,0.13,0.137,2
+COP,Colombian Peso,$,0.00022,0.00023,2
+CRC,Costa Rican Colon,₡,0.0018,0.0019,2
+CUP,Cuban Peso,$,0.0396,0.0417,2
+CVE,Cape Verdean Escudo,$,0.0091,0.0096,2
+CZK,Czech Koruna,Kč,0.041,0.043,2
+DJF,Djiboutian Franc,Fdj,0.0053,0.0056,0
+DKK,Danish Krone,kr,0.134,0.141,2
+DOP,Dominican Peso,RD$,0.0158,0.0166,2
+DZD,Algerian Dinar,د.ج,0.0071,0.0075,2
+EGP,Egyptian Pound,£,0.019,0.02,2
+ERN,Eritrean Nakfa,Nfk,0.063,0.067,2
+ETB,Ethiopian Birr,Br,0.0075,0.0079,2
 EUR,Euro,€,1.000,1.050,2
-USD,US Dollar,$,0.950,1.000,2
-GBP,British Pound,£,1.160,1.220,2
-CHF,Swiss Franc,Fr.,1.050,1.100,2
+FJD,Fijian Dollar,$,0.42,0.44,2
+FKP,Falkland Islands Pound,£,1.19,1.25,2
+GBP,British Pound,£,1.16,1.22,2
+GEL,Georgian Lari,₾,0.35,0.37,2
+GHS,Ghanaian Cedi,₵,0.062,0.065,2
+GIP,Gibraltar Pound,£,1.19,1.25,2
+GMD,Gambian Dalasi,D,0.013,0.0137,2
+GNF,Guinean Franc,FG,0.00011,0.00012,0
+GTQ,Guatemalan Quetzal,Q,0.122,0.128,2
+GYD,Guyanese Dollar,$,0.0045,0.0048,2
+HKD,Hong Kong Dollar,HK$,0.122,0.128,2
+HNL,Honduran Lempira,L,0.038,0.04,2
+HTG,Haitian Gourde,G,0.0072,0.0076,2
+HUF,Hungarian Forint,Ft,0.0026,0.0027,2
+IDR,Indonesian Rupiah,Rp,0.00006,0.000063,2
+ILS,Israeli New Shekel,₪,0.26,0.274,2
+INR,Indian Rupee,₹,0.0114,0.012,2
+IQD,Iraqi Dinar,ع.د,0.00073,0.00077,3
+IRR,Iranian Rial,﷼,0.0000226,0.0000238,2
+ISK,Icelandic Krona,kr,0.0069,0.0073,0
+JMD,Jamaican Dollar,J$,0.0061,0.0064,2
+JOD,Jordanian Dinar,د.ا,1.34,1.41,3
 JPY,Japanese Yen,¥,0.0065,0.0068,0
-CAD,Canadian Dollar,C$,0.690,0.725,2
-AUD,Australian Dollar,A$,0.610,0.640,2
-CNY,Chinese Yuan,¥,0.130,0.137,2
-SAR,Saudi Riyal,ر.س,0.250,0.267,2
+KES,Kenyan Shilling,KSh,0.0073,0.0077,2
+KGS,Kyrgyzstani Som,лв,0.011,0.0116,2
+KHR,Cambodian Riel,៛,0.00023,0.00024,2
+KMF,Comorian Franc,CF,0.002,0.0021,0
+KPW,North Korean Won,₩,0.00106,0.00111,2
+KRW,South Korean Won,₩,0.00069,0.00073,0
+KWD,Kuwaiti Dinar,د.ك,3.10,3.26,3
+KYD,Cayman Islands Dollar,$,1.14,1.20,2
+KZT,Kazakhstani Tenge,₸,0.0019,0.002,2
+LAK,Lao Kip,₭,0.000044,0.000046,2
+LBP,Lebanese Pound,ل.ل,0.0000106,0.0000112,2
+LKR,Sri Lankan Rupee,₨,0.0032,0.0034,2
+LRD,Liberian Dollar,$,0.0049,0.0052,2
+LSL,Lesotho Loti,L,0.053,0.056,2
+LYD,Libyan Dinar,ل.د,0.196,0.206,3
+MAD,Moroccan Dirham,د.م.,0.095,0.10,2
+MDL,Moldovan Leu,L,0.051,0.054,2
+MGA,Malagasy Ariary,Ar,0.0002,0.00021,2
+MKD,Macedonian Denar,ден,0.0163,0.0171,2
+MMK,Myanmar Kyat,K,0.00045,0.00047,2
+MNT,Mongolian Togrog,₮,0.00027,0.00028,2
+MOP,Macanese Pataca,MOP$,0.118,0.124,2
+MRU,Mauritanian Ouguiya,UM,0.024,0.025,2
+MUR,Mauritian Rupee,₨,0.02,0.021,2
+MVR,Maldivian Rufiyaa,.ރ,0.062,0.065,2
+MWK,Malawian Kwacha,MK,0.00055,0.00058,2
+MXN,Mexican Peso,$,0.047,0.05,2
+MYR,Malaysian Ringgit,RM,0.2,0.21,2
+MZN,Mozambican Metical,MT,0.015,0.0157,2
+NAD,Namibian Dollar,$,0.053,0.056,2
+NGN,Nigerian Naira,₦,0.00061,0.00064,2
+NIO,Nicaraguan Cordoba,C$,0.026,0.027,2
+NOK,Norwegian Krone,kr,0.083,0.087,2
+NPR,Nepalese Rupee,₨,0.0071,0.0075,2
+NZD,New Zealand Dollar,$,0.56,0.59,2
+OMR,Omani Rial,﷼,2.47,2.60,3
+PAB,Panamanian Balboa,B/.,0.95,1.00,2
+PEN,Peruvian Sol,S/,0.25,0.263,2
+PGK,Papua New Guinean Kina,K,0.24,0.253,2
+PHP,Philippine Peso,₱,0.0163,0.0171,2
+PKR,Pakistani Rupee,₨,0.0034,0.0036,2
+PLN,Polish Zloty,zł,0.235,0.247,2
+PYG,Paraguayan Guarani,₲,0.00012,0.000126,0
+QAR,Qatari Riyal,﷼,0.26,0.274,2
+RON,Romanian Leu,lei,0.201,0.211,2
+RSD,Serbian Dinar,дин.,0.0085,0.0089,2
+RUB,Russian Ruble,₽,0.0096,0.0101,2
+RWF,Rwandan Franc,FRw,0.00071,0.00075,0
+SAR,Saudi Riyal,ر.س,0.25,0.267,2
+SBD,Solomon Islands Dollar,$,0.113,0.119,2
+SCR,Seychellois Rupee,₨,0.068,0.072,2
+SDG,Sudanese Pound,ج.س.,0.0016,0.0017,2
+SEK,Swedish Krona,kr,0.085,0.089,2
+SGD,Singapore Dollar,$,0.70,0.735,2
+SHP,Saint Helena Pound,£,1.19,1.25,2
+SLE,Sierra Leonean Leone,Le,0.041,0.043,2
+SOS,Somali Shilling,S,0.0017,0.0018,2
+SRD,Surinamese Dollar,$,0.026,0.027,2
+SSP,South Sudanese Pound,£,0.00073,0.00077,2
+STN,Sao Tome and Principe Dobra,Db,0.039,0.041,2
+SYP,Syrian Pound,£,0.000073,0.000077,2
+SZL,Eswatini Lilangeni,L,0.053,0.056,2
+THB,Thai Baht,฿,0.026,0.0275,2
+TJS,Tajikistani Somoni,ЅМ,0.087,0.092,2
+TMT,Turkmenistani Manat,m,0.271,0.286,2
+TND,Tunisian Dinar,د.ت,0.304,0.320,3
+TOP,Tongan Pa'anga,T$,0.40,0.42,2
+TRY,Turkish Lira,₺,0.027,0.0285,2
+TTD,Trinidad and Tobago Dollar,TT$,0.14,0.147,2
+TWD,New Taiwan Dollar,NT$,0.029,0.0305,2
+TZS,Tanzanian Shilling,TSh,0.00036,0.00038,2
+UAH,Ukrainian Hryvnia,₴,0.023,0.0242,2
+UGX,Ugandan Shilling,USh,0.00025,0.00026,0
+USD,US Dollar,$,0.950,1.000,2
+UYU,Uruguayan Peso,$U,0.024,0.025,2
+UZS,Uzbekistani Som,лв,0.000074,0.000078,2
+VES,Venezuelan Bolivar,Bs.S,0.0154,0.0162,2
+VND,Vietnamese Dong,₫,0.000038,0.00004,0
+VUV,Vanuatu Vatu,VT,0.0079,0.0083,0
+WST,Samoan Tala,T,0.34,0.358,2
+XAF,Central African CFA Franc,FCFA,0.0015,0.00158,0
+XCD,East Caribbean Dollar,$,0.35,0.368,2
+XOF,West African CFA Franc,CFA,0.0015,0.00158,0
+XPF,CFP Franc,₣,0.0084,0.0088,0
+YER,Yemeni Rial,﷼,0.0038,0.004,2
+ZAR,South African Rand,R,0.053,0.056,2
+ZMW,Zambian Kwacha,ZK,0.036,0.038,2
+ZWL,Zimbabwean Dollar,$,,,2

@@ -8,6 +8,15 @@ from app.api.routes.ws_receiver_routes import router as ws_receiver_router
 from app.api.routes import notifications
 from app.api.routes import audit_logs
 from app.api.routes import access_requests
+from app.api.routes import business_variables
+from app.api.routes import reference_data
+from app.api.routes import watchlist
+from app.api.routes import pending_transactions
+from app.api.routes import pending_validations
+from app.api.routes import reports
+from app.api.routes import sla
+from app.api.routes import batch
+from app.api.routes import delivery_retries
 
 api_router = APIRouter()
 
@@ -30,6 +39,15 @@ api_router.include_router(validation_router, prefix="/validation", tags=["valida
 api_router.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
 api_router.include_router(audit_logs.router, prefix="/audit-logs", tags=["audit-logs"])
 api_router.include_router(access_requests.router, prefix="/access-requests", tags=["access-requests"])
+api_router.include_router(business_variables.router, prefix="/business-variables", tags=["business-variables"])
+api_router.include_router(reference_data.router, prefix="/reference-data", tags=["reference-data"])
+api_router.include_router(watchlist.router, prefix="/watchlist", tags=["watchlist"])
+api_router.include_router(pending_transactions.router, prefix="/pending-transactions", tags=["pending-transactions"])
+api_router.include_router(pending_validations.router, prefix="/pending-validations", tags=["pending-validations"])
+api_router.include_router(reports.router, prefix="/reports", tags=["reports"])
+api_router.include_router(sla.router, prefix="/reports", tags=["sla"])
+api_router.include_router(batch.router, prefix="/transform", tags=["batch-transform"])
+api_router.include_router(delivery_retries.router, prefix="/delivery-retries", tags=["delivery-retries"])
 
 # Test web service receiver (simulates external system consuming REST pipeline output)
 api_router.include_router(ws_receiver_router, prefix="/ws-receiver", tags=["Web Service Receiver"])

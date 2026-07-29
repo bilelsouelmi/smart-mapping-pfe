@@ -41,7 +41,13 @@ class ValidationRule(Base):
     fin_format = Column(String(50), nullable=True)   # 16x, 6!n, 3!a...
     pattern = Column(String(500), nullable=True)     # regex
     element_type = Column(String(50), nullable=True) # STRING, INTEGER, DECIMAL, DATE, CODE
-    
+
+    # Set from the source MessageDescriptionElement's own reference_category
+    # (see that model) — when present, _validate_field checks this field's
+    # value against the live ReferenceData rows for this category instead
+    # of (or in addition to) fin_format/pattern.
+    reference_category = Column(String(50), nullable=True)
+
     # Meta
     description = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)

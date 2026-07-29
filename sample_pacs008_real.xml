@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
+  <FIToFICstmrCdtTrf>
+    <GrpHdr>
+      <MsgId>BNPAFRPP20260718000123</MsgId>
+      <CreDtTm>2026-07-18T09:15:32</CreDtTm>
+      <NbOfTxs>1</NbOfTxs>
+      <SttlmInf>
+        <SttlmMtd>CLRG</SttlmMtd>
+      </SttlmInf>
+      <TtlIntrBkSttlmAmt Ccy="EUR">12500.00</TtlIntrBkSttlmAmt>
+    </GrpHdr>
+    <CdtTrfTxInf>
+      <PmtId>
+        <EndToEndId>INV-2026-778241</EndToEndId>
+        <TxId>BNPAFRPP20260718000123TX01</TxId>
+      </PmtId>
+      <IntrBkSttlmAmt Ccy="EUR">12500.00</IntrBkSttlmAmt>
+      <IntrBkSttlmDt>2026-07-18</IntrBkSttlmDt>
+      <ChrgBr>SHAR</ChrgBr>
+      <Dbtr>
+        <Nm>ACME MANUFACTURING SAS</Nm>
+        <PstlAdr>
+          <TwnNm>LYON</TwnNm>
+          <Ctry>FR</Ctry>
+        </PstlAdr>
+      </Dbtr>
+      <DbtrAcct>
+        <Id>
+          <IBAN>FR7630006000011234567890189</IBAN>
+        </Id>
+      </DbtrAcct>
+      <DbtrAgt>
+        <FinInstnId>
+          <BICFI>BNPAFRPPXXX</BICFI>
+        </FinInstnId>
+      </DbtrAgt>
+      <CdtrAgt>
+        <FinInstnId>
+          <BICFI>DEUTDEFFXXX</BICFI>
+        </FinInstnId>
+      </CdtrAgt>
+      <Cdtr>
+        <Nm>SCHMIDT INDUSTRIES GMBH</Nm>
+        <PstlAdr>
+          <TwnNm>FRANKFURT AM MAIN</TwnNm>
+          <Ctry>DE</Ctry>
+        </PstlAdr>
+      </Cdtr>
+      <CdtrAcct>
+        <Id>
+          <IBAN>DE75512108001245126199</IBAN>
+        </Id>
+      </CdtrAcct>
+      <Purp>
+        <Cd>SUPP</Cd>
+      </Purp>
+      <RmtInf>
+        <Ustrd>INVOICE 2026-778241 - MACHINE PARTS ORDER</Ustrd>
+      </RmtInf>
+    </CdtTrfTxInf>
+  </FIToFICstmrCdtTrf>
+</Document>

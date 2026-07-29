@@ -14,6 +14,13 @@ from app.models.config_consommation import ConfigConsommation
 from app.models.notification import Notification
 from app.models.audit_log import AuditLog
 from app.models.access_request import AccessRequest
+from app.models.business_variable import BusinessVariable
+from app.models.watchlist_entity import WatchlistEntity
+from app.models.processed_transaction import ProcessedTransaction
+from app.models.pending_transaction import PendingTransactionApproval, PendingTransactionApprovalVote
+from app.models.pending_validation_correction import PendingValidationCorrection
+from app.models.pending_delivery_retry import PendingDeliveryRetry
+from app.models.reference_data import ReferenceData
 
 __all__ = [
     "User",
@@ -33,4 +40,12 @@ __all__ = [
     "Notification",
     "AuditLog",
     "AccessRequest",
+    "BusinessVariable",
+    "WatchlistEntity",
+    "ProcessedTransaction",
+    "PendingTransactionApproval",
+    "PendingTransactionApprovalVote",
+    "PendingValidationCorrection",
+    "PendingDeliveryRetry",
+    "ReferenceData",
 ]

@@ -5,7 +5,7 @@ from app.database import get_db
 from app.core.security import verify_password, get_password_hash, create_access_token
 from app.core.deps import get_current_user
 from app.models.user import User
-from app.schemas.user import UserCreate, UserLogin, UserResponse
+from app.schemas.user import UserCreate, UserLogin, UserResponse, ALLOWED_EMAIL_DOMAIN
 from app.config import settings
 import logging
 
@@ -22,6 +22,15 @@ def register(
     Créer un nouveau compte utilisateur.
     Le compte est créé avec is_active=False et doit être approuvé par un administrateur.
     """
+    # Platform is provisioned exclusively for Vermeg staff — reject a
+    # non-Vermeg email up front rather than creating an account that
+    # would just sit in the pending-approval queue forever.
+    if not user_data.email.lower().endswith(f"@{ALLOWED_EMAIL_DOMAIN}"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Only @{ALLOWED_EMAIL_DOMAIN} email addresses are allowed"
+        )
+
     # Check if user already exists
     existing_user = db.query(User).filter(
         (User.email == user_data.email) | (User.username == user_data.username)
@@ -63,19 +72,19 @@ def login(
     Connexion utilisateur - retourne un JWT token.
     """
     # Find user
-    user = db.query(User).filter(User.username == credentials.username).first()
+    user = db.query(User).filter(User.email == credentials.email).first()
 
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password"
+            detail="Incorrect email or password"
         )
 
     # Verify password
     if not verify_password(credentials.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password"
+            detail="Incorrect email or password"
         )
 
     # Check if account is pending approval

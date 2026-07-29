@@ -3,13 +3,13 @@ New Transform endpoint using Mapping + MappingElement
 POST /api/transform/mapping/{mapping_id}
 """
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
-from fastapi.responses import Response
+from fastapi.responses import Response, JSONResponse
 from sqlalchemy.orm import Session
 import logging
 import re
 import json
-from typing import Optional
-from datetime import datetime
+from typing import Optional, Dict
+from datetime import datetime, timedelta
 from pathlib import Path
 from xml.dom import minidom
 import xml.etree.ElementTree as ET
@@ -17,7 +17,7 @@ import xml.etree.ElementTree as ET
 from app.database import get_db
 from app.core.deps import get_current_user
 from app.models.user import User
-from app.models.mapping import Mapping, MappingElement
+from app.models.mapping import Mapping, MappingElement, MappingStatus
 from app.models.message_description import MessageDescription
 from app.services.swift_txt_parser import SWIFTTextParser as SwiftTxtParser
 
@@ -909,14 +909,23 @@ class _XMLPathRef:
 _GLOBAL_VARS_CACHE: Optional[dict] = None
 
 
+def invalidate_global_variables_cache() -> None:
+    """Called by business_variables.py after any create/update/delete so
+    the next transform picks up the new value immediately instead of
+    waiting for a process restart."""
+    global _GLOBAL_VARS_CACHE
+    _GLOBAL_VARS_CACHE = None
+
+
 def _get_global_variables() -> dict:
     """Merges <Variable name=.. value=..> constants from every reference
     mapping file (CENTURY_CUTOFF_YEAR, OPENING_BALANCE_CODE, ...) into one
-    dict. These are effectively domain-wide constants — every file that
-    defines them uses the same value — so a single merged lookup (cached
-    for the life of the process) is enough for the bare uppercase
-    identifiers the pseudocode references (e.g. expandCentury(x, "yyMMdd",
-    CENTURY_CUTOFF_YEAR))."""
+    dict, then lets the admin-editable business_variables table override
+    any of them by name — that table is the actual source of truth once
+    an admin has touched a value (see business_variables.py); the XML
+    defaults just seed it and cover any name an admin hasn't edited yet.
+    Cached for the life of the process (invalidated on edit) since this
+    is looked up per formula-evaluation line."""
     global _GLOBAL_VARS_CACHE
     if _GLOBAL_VARS_CACHE is None:
         merged: dict = {}
@@ -928,8 +937,339 @@ def _get_global_variables() -> dict:
                     merged.setdefault(name, info.get('value', ''))
         except Exception as e:
             logger.warning(f"Could not load global variables for XML-dialect evaluator: {e}")
+
+        try:
+            from app.database import SessionLocal
+            from app.models.business_variable import BusinessVariable
+            db = SessionLocal()
+            try:
+                for var in db.query(BusinessVariable).all():
+                    merged[var.name] = var.value
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"Could not load business_variables overrides: {e}")
+
         _GLOBAL_VARS_CACHE = merged
     return _GLOBAL_VARS_CACHE
+
+
+def _name_matches_watchlist(extracted_name: str, entries: list) -> Optional[str]:
+    """Case-insensitive, either-direction substring match — deliberately
+    simple (no fuzzy/phonetic matching) since this is a demo watchlist,
+    not a production screening engine. Returns the matched entry's name
+    or None."""
+    name_upper = extracted_name.strip().upper()
+    if not name_upper:
+        return None
+    for entry in entries:
+        if entry.name in name_upper or name_upper in entry.name:
+            return entry.name
+    return None
+
+
+# mt_type -> (business variable that names its duplicate-detection
+# window, unit that variable is expressed in). Each mapping file names
+# AND scopes this differently — MT103/MT202 document a DAYS window,
+# MT900/MT910 document HOURS (their own <Conditions> blocks: "REJECT
+# E004: Duplicate MT900 notification" / MT910 equivalent) — reconciling
+# that inconsistency is exactly what this map is for, rather than
+# silently only ever reading MT103's spelling and unit. MT940/MT950 are
+# deliberately absent: they're bank-generated STATEMENT messages, not
+# something that initiates a transfer, and neither declares a duplicate-
+# detection variable at all.
+_DUPLICATE_WINDOW_VAR_BY_TYPE = {
+    'MT103': ('DUPLICATE_DETECTION_WINDOW_DAYS', 'days'),
+    'MT202': ('DUPLICATE_WINDOW_DAYS', 'days'),
+    'MT900': ('DUPLICATE_DETECTION_WINDOW_HOURS', 'hours'),
+    'MT910': ('DUPLICATE_DETECTION_WINDOW_HOURS', 'hours'),
+}
+
+
+def _check_duplicate_reference(db: Session, current_user: User, mt_type: str, source_fields: dict, filename: str) -> None:
+    """Field :20: (reference) checked against previously-processed
+    messages of the SAME mt_type, within that type's own duplicate-
+    window business variable. Blocks (like sanctions), since processing
+    the same payment reference twice is a real double-debit risk, not
+    just something to flag and wave through. Recording the reference on
+    success happens separately, at the very end of the caller, so a
+    request that fails for some OTHER reason doesn't falsely "use up"
+    the reference. Takes mt_type directly (not a Mapping object) since
+    it's called from both directions — MT source uses mapping.source,
+    XML source (reverse direction) uses mapping.target."""
+    window_config = _DUPLICATE_WINDOW_VAR_BY_TYPE.get(mt_type)
+    if not window_config:
+        return
+    window_var, unit = window_config
+
+    reference = (source_fields.get('20') or '').strip()
+    if not reference:
+        return
+
+    global_vars = _get_global_variables()
+    try:
+        window_value = float(global_vars.get(window_var, 7))
+    except (TypeError, ValueError):
+        window_value = 7
+    if window_value <= 0:
+        return
+
+    from app.models.processed_transaction import ProcessedTransaction
+    from app.models.audit_log import AuditLog
+    from app.models.notification import Notification
+    from app.models.user import User as _User
+
+    cutoff = datetime.utcnow() - timedelta(**{unit: window_value})
+    existing = db.query(ProcessedTransaction).filter(
+        ProcessedTransaction.mt_type == mt_type,
+        ProcessedTransaction.reference == reference,
+        ProcessedTransaction.created_at >= cutoff
+    ).first()
+    if not existing:
+        return
+
+    details = (
+        f"{mt_type} \"{filename}\" reference \"{reference}\" duplicates a message already processed "
+        f"on {existing.created_at.strftime('%Y-%m-%d %H:%M')} (\"{existing.file_name}\"), "
+        f"within the {window_value:g}-{unit[:-1] if window_value == 1 else unit} detection window"
+    )
+    db.add(AuditLog(
+        user_id=current_user.id, username=current_user.username,
+        action="duplicate_block", entity_type="TransformationJob", details=details,
+    ))
+    for admin in db.query(_User).filter(_User.is_admin.is_(True)).all():
+        db.add(Notification(
+            user_id=admin.id,
+            message=f"🔁 Duplicate blocked: {current_user.username}'s transform of \"{filename}\" reuses reference \"{reference}\", already processed.",
+            link="/audit-log"
+        ))
+    db.commit()
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=f"Transform blocked: Duplicate message ID detected — reference \"{reference}\" was already processed within the last {window_value:g} {unit}."
+    )
+
+
+def _record_processed_transaction(db: Session, current_user: User, mt_type: str, source_fields: dict, filename: str) -> None:
+    """Called only after a transform actually succeeds — see
+    _check_duplicate_reference's docstring for why recording is split
+    from checking (and why this takes mt_type directly)."""
+    if mt_type not in _DUPLICATE_WINDOW_VAR_BY_TYPE:
+        return
+    reference = (source_fields.get('20') or '').strip()
+    if not reference:
+        return
+
+    from app.models.processed_transaction import ProcessedTransaction
+    db.add(ProcessedTransaction(
+        mt_type=mt_type, reference=reference, file_name=filename, user_id=current_user.id,
+    ))
+    db.commit()
+
+
+def _required_approvals_for_amount(db: Session, mt_type: str, source_fields: dict) -> Optional[int]:
+    """Multi-level approval by threshold: how many DIFFERENT admins must
+    sign off before this transform's output is released. None means no
+    hold is needed. Reuses the same two business variables the AML flag
+    already reads — CRITICAL_AMOUNT_THRESHOLD is checked first since
+    it's the higher bar (2 approvals); LARGE_AMOUNT_THRESHOLD alone
+    means 1. MT103-only — no other type declares a critical/large tier
+    calling for a HOLD (as opposed to just an alert)."""
+    if mt_type != 'MT103':
+        return None
+    parsed = _extract_32a_amount(source_fields)
+    if not parsed:
+        return None
+    amount, currency = parsed
+
+    from app.models.business_variable import BusinessVariable
+    for name, required in (('CRITICAL_AMOUNT_THRESHOLD', 2), ('LARGE_AMOUNT_THRESHOLD', 1)):
+        var = db.query(BusinessVariable).filter(BusinessVariable.name == name).first()
+        if not var:
+            continue
+        try:
+            threshold = float(var.value)
+        except ValueError:
+            continue
+        if var.currency and var.currency.upper() != currency.upper():
+            continue
+        if amount >= threshold:
+            return required
+    return None
+
+
+def _screening_parties(mt_type: str, source_fields: dict) -> tuple:
+    """Which fields get screened, and against which list(s) — differs by
+    message type since MT103 carries customer NAMES (:50K:/:59:) while
+    MT202 carries INSTITUTION BICs (:52A:/:58A:, per its own <Conditions>
+    block: 'NOT is_sanctioned_institution(bic) -> ... BLOCK message').
+    PEP screening only applies to MT103 — "politically exposed person"
+    is inherently about individuals, not the banks MT202 moves money
+    between, and MT202's dataset never declares PEP_SCREENING_ENABLED
+    at all. Returns (parties, pep_applicable)."""
+    if mt_type == 'MT103':
+        return [
+            ('Ordering Customer (:50K:)', _fn_firstLine(source_fields.get('50K', ''))),
+            ('Beneficiary (:59:)', _fn_firstLine(source_fields.get('59', ''))),
+        ], True
+    if mt_type == 'MT202':
+        return [
+            ('Ordering Institution (:52A:)', _fn_extractBIC(source_fields.get('52A', ''))),
+            ('Beneficiary Institution (:58A:)', _fn_extractBIC(source_fields.get('58A', ''))),
+        ], False
+    return [], False
+
+
+def _check_sanctions_and_pep(db: Session, current_user: User, mt_type: str, source_fields: dict, filename: str) -> Optional[dict]:
+    """Ordering/beneficiary parties (see _screening_parties) checked
+    against the watchlist_entities table, gated by the
+    SANCTIONS_SCREENING_ENABLED / PEP_SCREENING_ENABLED business
+    variables — the dataset's own <Conditions> blocks document
+    is_sanctioned_party()/is_sanctioned_institution() -> "BLOCK message
+    AND ALERT compliance team immediately" and, for MT103 only,
+    is_politically_exposed_person() -> "FLAG for enhanced due diligence
+    review AND PROCEED with hold". Sanctions hits raise immediately
+    (block the transform) — audited/notified right here since nothing
+    downstream needs to happen. PEP hits do NOT raise or log/notify
+    here: they only return the hit info, because "PROCEED with hold"
+    means the output has to actually be generated and saved first (see
+    the caller's late hold-creation block, same place the large-amount
+    hold is created) before there's anything to hold. Returns the PEP
+    hit as {'role', 'name', 'matched'}, or None."""
+    parties, pep_applicable = _screening_parties(mt_type, source_fields)
+    if not parties:
+        return None
+
+    global_vars = _get_global_variables()
+    sanctions_enabled = str(global_vars.get('SANCTIONS_SCREENING_ENABLED', 'true')).strip().lower() == 'true'
+    pep_enabled = pep_applicable and str(global_vars.get('PEP_SCREENING_ENABLED', 'true')).strip().lower() == 'true'
+    if not sanctions_enabled and not pep_enabled:
+        return None
+
+    from app.models.watchlist_entity import WatchlistEntity
+    from app.models.audit_log import AuditLog
+    from app.models.notification import Notification
+    from app.models.user import User as _User
+
+    # 'active' entries are fully approved; 'pending_remove' ones are still
+    # enforced too — a removal only stops here once a SECOND compliance
+    # officer confirms it (see watchlist.py's maker-checker), so a single
+    # officer can't silently disable a hit just by requesting removal.
+    enforced_statuses = ('active', 'pending_remove')
+    sanctions_list = db.query(WatchlistEntity).filter(
+        WatchlistEntity.list_type == 'SANCTIONS', WatchlistEntity.status.in_(enforced_statuses)
+    ).all() if sanctions_enabled else []
+    pep_list = db.query(WatchlistEntity).filter(
+        WatchlistEntity.list_type == 'PEP', WatchlistEntity.status.in_(enforced_statuses)
+    ).all() if pep_enabled else []
+
+    for role, name in parties:
+        if not name:
+            continue
+
+        sanctions_hit = _name_matches_watchlist(name, sanctions_list) if sanctions_enabled else None
+        if sanctions_hit:
+            details = f"{mt_type} \"{filename}\" {role} \"{name}\" matches sanctions watchlist entry \"{sanctions_hit}\""
+            db.add(AuditLog(
+                user_id=current_user.id, username=current_user.username,
+                action="sanctions_block", entity_type="TransformationJob", details=details,
+            ))
+            for admin in db.query(_User).filter(_User.is_admin.is_(True)).all():
+                db.add(Notification(
+                    user_id=admin.id,
+                    message=f"🚫 SANCTIONS HIT: {current_user.username}'s transform of \"{filename}\" was blocked — {role} \"{name}\" matches the sanctions watchlist.",
+                    link="/audit-log"
+                ))
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Transform blocked: {role} matches a sanctions watchlist entry. Compliance has been alerted."
+            )
+
+        pep_hit = _name_matches_watchlist(name, pep_list) if pep_enabled else None
+        if pep_hit:
+            return {'role': role, 'name': name, 'matched': pep_hit}
+
+    return None
+
+
+def _extract_32a_amount(source_fields: dict) -> Optional[tuple]:
+    """Parses field :32A: (YYMMDD + 3-letter currency + comma-decimal
+    amount) into (amount: float, currency: str), or None if the field is
+    missing/malformed. Same composite format (SWIFT '6!n3!a15d') across
+    MT103/MT202/MT900/MT910 — shared by the large-amount alert/hold
+    checks, which all key off the same figure."""
+    field_32a = source_fields.get('32A') or source_fields.get(':32A:')
+    if not field_32a:
+        return None
+    match = re.match(r'^\d{6}([A-Z]{3})([\d,]+)$', field_32a.strip())
+    if not match:
+        return None
+    currency, amount_str = match.group(1), match.group(2)
+    try:
+        amount = float(amount_str.replace(',', '.'))
+    except ValueError:
+        return None
+    return amount, currency
+
+
+# mt_type -> the business variable naming its large-amount alert
+# threshold. MT103's own <Conditions> block documents "FLAG for AML
+# compliance review AND PROCEED"; MT900/MT910's document the identical
+# pattern under their own variable names ("ALERT treasury AND PROCEED —
+# warning not rejection"). MT202 is deliberately absent: its dataset
+# never declares a large-amount variable at all. MT940/MT950 likewise
+# absent — statement messages, nothing being alerted on.
+_LARGE_AMOUNT_VAR_BY_TYPE = {
+    'MT103': 'LARGE_AMOUNT_THRESHOLD',
+    'MT900': 'LARGE_DEBIT_THRESHOLD',
+    'MT910': 'LARGE_CREDIT_THRESHOLD',
+}
+
+
+def _check_large_amount_flag(db: Session, current_user: User, mt_type: str, source_fields: dict, filename: str) -> None:
+    """Field :32A: (date+currency+amount) checked against this mt_type's
+    large-amount business variable (see _LARGE_AMOUNT_VAR_BY_TYPE) — the
+    one enforcement each dataset's own <Conditions> block documents but
+    that, until now, no code actually ran. Never blocks the transform —
+    only logs + notifies, matching that documented ElseAction."""
+    threshold_var_name = _LARGE_AMOUNT_VAR_BY_TYPE.get(mt_type)
+    if not threshold_var_name:
+        return
+    parsed = _extract_32a_amount(source_fields)
+    if not parsed:
+        return
+    amount, currency = parsed
+
+    from app.models.business_variable import BusinessVariable
+    threshold_var = db.query(BusinessVariable).filter(BusinessVariable.name == threshold_var_name).first()
+    if not threshold_var:
+        return
+    try:
+        threshold = float(threshold_var.value)
+    except ValueError:
+        return
+    if threshold_var.currency and threshold_var.currency.upper() != currency.upper():
+        return
+
+    if amount < threshold:
+        return
+
+    from app.models.audit_log import AuditLog
+    from app.models.notification import Notification
+    from app.models.user import User as _User
+    details = f"{mt_type} \"{filename}\" amount {amount:,.2f} {currency} >= {threshold_var_name} ({threshold:,.2f} {threshold_var.currency or currency})"
+    db.add(AuditLog(
+        user_id=current_user.id, username=current_user.username,
+        action="aml_flag", entity_type="TransformationJob", details=details,
+    ))
+    for admin in db.query(_User).filter(_User.is_admin.is_(True)).all():
+        db.add(Notification(
+            user_id=admin.id,
+            message=f"⚠️ Large amount alert: {current_user.username}'s transform of \"{filename}\" is {amount:,.2f} {currency}, above the {threshold:,.2f} threshold.",
+            link="/audit-log"
+        ))
+    db.commit()
 
 
 def _as_str(value) -> str:
@@ -1217,6 +1557,60 @@ def _fn_is_politically_exposed_person(x=''): return False
 def _fn_exists_duplicate(x=''): return False
 def _fn_lookupBIC(x=''): return x or ''
 def _fn_coreAccountLookup(x=''): return x or ''
+
+
+_REFERENCE_DATA_CACHE: Optional[Dict[str, Dict[str, str]]] = None
+
+
+def invalidate_reference_data_cache() -> None:
+    """Called by reference_data.py after any create/update/delete/import so
+    the next transform picks up the change immediately instead of waiting
+    for a process restart — same reasoning as invalidate_global_variables_cache()
+    above, for the same reason (this cache is looked up per formula line)."""
+    global _REFERENCE_DATA_CACHE
+    _REFERENCE_DATA_CACHE = None
+
+
+def _get_reference_data_map(category: str) -> Dict[str, str]:
+    """{code: name} for every active ReferenceData row in `category`,
+    fetched once per process (or since the last invalidate) and cached —
+    ReferenceLookup() calls this once per formula line, same access
+    pattern as _get_global_variables(). Opens its own short-lived session
+    rather than threading a `db` parameter through evaluate_expression():
+    the XML-dialect evaluator has no db in scope at all (it runs during
+    Transform, Generate Elements preview, and the pipeline auto-consumption
+    path alike), so this matches how _get_global_variables() already
+    solves the identical problem for BusinessVariable lookups."""
+    global _REFERENCE_DATA_CACHE
+    if _REFERENCE_DATA_CACHE is None:
+        _REFERENCE_DATA_CACHE = {}
+    if category not in _REFERENCE_DATA_CACHE:
+        by_code: Dict[str, str] = {}
+        try:
+            from app.database import SessionLocal
+            from app.models.reference_data import ReferenceData
+            db = SessionLocal()
+            try:
+                rows = db.query(ReferenceData).filter(
+                    ReferenceData.category == category, ReferenceData.is_active == True  # noqa: E712
+                ).all()
+                for r in rows:
+                    by_code[r.code] = r.name
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"Could not load ReferenceData for category '{category}': {e}")
+        _REFERENCE_DATA_CACHE[category] = by_code
+    return _REFERENCE_DATA_CACHE[category]
+
+
+def _fn_referenceLookup(category='', code=''):
+    """ReferenceLookup("ISO_CURRENCY", currencyCode) / ReferenceLookup("COUNTRY",
+    countryCode) — resolves a code to its Reference Data display name (e.g.
+    "EUR" -> "Euro"). Empty string (not an error) when the category has no
+    active rows or the code isn't found, so a formula using this to enrich
+    a field degrades to a blank rather than aborting the whole transform."""
+    return _get_reference_data_map(category).get((code or '').strip().upper(), '')
 def _fn_describeSecurity(x=''): return x or ''
 def _fn_defaultCustodian(): return ''
 
@@ -1259,7 +1653,7 @@ _XML_DIALECT_FUNCTIONS = {
     'exists_duplicate': _fn_exists_duplicate, 'lookupBIC': _fn_lookupBIC,
     'coreAccountLookup': _fn_coreAccountLookup, 'describeSecurity': _fn_describeSecurity,
     'defaultCustodian': _fn_defaultCustodian, 'extractISIN': _fn_extractISIN,
-    'sum': _fn_sum,
+    'sum': _fn_sum, 'ReferenceLookup': _fn_referenceLookup,
 }
 
 
@@ -2025,7 +2419,7 @@ def build_xml_from_dict(data: dict, namespace: str, root_tag: str, iso_target: s
         return f'<?xml version="1.0" encoding="UTF-8"?>\n{xml_str}'
 
 
-async def _transform_xml_to_mt_with_mapping(mapping, elements, content_str: str, db: Session):
+async def _transform_xml_to_mt_with_mapping(mapping, elements, content_str: str, db: Session, current_user: User, upload_filename: str):
     """
     XML -> MT counterpart to transform_with_mapping's MT -> XML path below —
     same MappingElement-driven design (Generate Elements' accepted-formula
@@ -2034,6 +2428,13 @@ async def _transform_xml_to_mt_with_mapping(mapping, elements, content_str: str,
     existing field-ordering/envelope-restore machinery for the final
     assembly rather than reimplementing it — that part has nothing
     direction-specific about it.
+
+    Also runs the SAME compliance checks (duplicate/sanctions/large-amount/
+    multi-level-approval) as the MT->XML direction — these were originally
+    wired up only there, which meant an XML source file converted back to
+    MT text skipped all of them entirely. mapping.target (not
+    mapping.source) is the actual MT type being produced here, so that's
+    what gets passed to each check.
 
     Takes the already-decoded file content rather than an UploadFile:
     transform_with_mapping reads the upload once at the top (to run the
@@ -2076,6 +2477,15 @@ async def _transform_xml_to_mt_with_mapping(mapping, elements, content_str: str,
 
     logger.info(f"XML->MT via mapping {mapping.id}: {mapped_count} mapped, {skipped_count} skipped")
 
+    mt_type = mapping.target.upper()
+    # Same bare-tag convention extract_source_fields uses on the other
+    # direction (e.g. source_fields['20'], not source_fields[':20:']) —
+    # every check function keys off that convention.
+    mt_source_fields = {tag.strip(':'): value for tag, value in mt_fields.items()}
+
+    _check_duplicate_reference(db, current_user, mt_type, mt_source_fields, upload_filename)
+    pep_hit = _check_sanctions_and_pep(db, current_user, mt_type, mt_source_fields, upload_filename)
+
     envelope = {}
     envelope_match = _re.search(r'SWIFT_ENVELOPE:({[^}]+(?:}[^}]*)*})', content_str, _re.DOTALL)
     if envelope_match:
@@ -2092,6 +2502,82 @@ async def _transform_xml_to_mt_with_mapping(mapping, elements, content_str: str,
     output_dir.mkdir(parents=True, exist_ok=True)
     with open(output_dir / filename, 'w', encoding='utf-8') as f:
         f.write(mt_text)
+
+    _check_large_amount_flag(db, current_user, mt_type, mt_source_fields, upload_filename)
+    _record_processed_transaction(db, current_user, mt_type, mt_source_fields, upload_filename)
+
+    required_approvals = _required_approvals_for_amount(db, mt_type, mt_source_fields)
+    if required_approvals:
+        from app.models.pending_transaction import PendingTransactionApproval
+        from app.models.notification import Notification as _Notification
+        from app.models.user import User as _User
+        from app.services.audit_service import log_action
+
+        parsed_amount = _extract_32a_amount(mt_source_fields)
+        amount_str, currency_str = (f"{parsed_amount[0]:,.2f}", parsed_amount[1]) if parsed_amount else (None, None)
+        reference = (mt_source_fields.get('20') or '').strip() or None
+
+        txn = PendingTransactionApproval(
+            mapping_id=mapping.id, mt_type=mt_type, reference=reference,
+            amount=amount_str, currency=currency_str, output_filename=filename,
+            required_approvals=required_approvals, status="pending", submitted_by=current_user.id,
+        )
+        db.add(txn)
+        log_action(
+            db, current_user, action="hold_for_approval", entity_type="PendingTransactionApproval",
+            details=f"Held \"{filename}\" ({amount_str} {currency_str}) — needs {required_approvals} approval(s)"
+        )
+        for admin in db.query(_User).filter(_User.is_admin.is_(True), _User.id != current_user.id).all():
+            db.add(_Notification(
+                user_id=admin.id,
+                message=f"🔒 {current_user.username}'s transform of \"{upload_filename}\" ({amount_str} {currency_str}) needs {required_approvals} approval(s) before release.",
+                link="/pending-transactions"
+            ))
+        db.commit()
+        db.refresh(txn)
+        return JSONResponse(status_code=202, content={
+            "held_for_approval": True,
+            "transaction_id": txn.id,
+            "required_approvals": required_approvals,
+            "message": f"This transaction ({amount_str} {currency_str}) exceeds the approval threshold and requires {required_approvals} admin approval(s) before the file is released. Check Pending Transactions for status."
+        })
+
+    elif pep_hit:
+        from app.models.pending_transaction import PendingTransactionApproval
+        from app.models.notification import Notification as _Notification
+        from app.models.user import User as _User
+        from app.services.audit_service import log_action
+
+        parsed_amount = _extract_32a_amount(mt_source_fields)
+        amount_str, currency_str = (f"{parsed_amount[0]:,.2f}", parsed_amount[1]) if parsed_amount else (None, None)
+        reference = (mt_source_fields.get('20') or '').strip() or None
+        reason = f"PEP match: {pep_hit['role']} \"{pep_hit['name']}\" (watchlist entry \"{pep_hit['matched']}\")"
+
+        txn = PendingTransactionApproval(
+            mapping_id=mapping.id, mt_type=mt_type, reference=reference,
+            amount=amount_str, currency=currency_str, output_filename=filename,
+            required_approvals=1, approver_role="compliance_officer", pending_reason=reason,
+            status="pending", submitted_by=current_user.id,
+        )
+        db.add(txn)
+        log_action(
+            db, current_user, action="pep_hold", entity_type="PendingTransactionApproval",
+            details=f"Held \"{filename}\" for compliance review — {reason}"
+        )
+        for officer in db.query(_User).filter(_User.is_compliance_officer.is_(True), _User.id != current_user.id).all():
+            db.add(_Notification(
+                user_id=officer.id,
+                message=f"⚠️ PEP match: {current_user.username}'s transform of \"{upload_filename}\" — {pep_hit['role']} \"{pep_hit['name']}\" needs compliance review before release.",
+                link="/pending-transactions"
+            ))
+        db.commit()
+        db.refresh(txn)
+        return JSONResponse(status_code=202, content={
+            "held_for_approval": True,
+            "transaction_id": txn.id,
+            "required_approvals": 1,
+            "message": f"{reason}. This requires enhanced due diligence review by a compliance officer before the file is released. Check Pending Transactions for status."
+        })
 
     # "Validate Generated Output (Optional)" — informational only, never
     # blocks returning the file the transform already successfully
@@ -2120,7 +2606,7 @@ def _detect_upload_type(tmp_path: str, filename: str) -> dict:
     return {"file_type": file_type, "mt_type": mt_type}
 
 
-def _run_transform_prechecks(content_str: str, filename: str, db: Session) -> None:
+def _run_transform_prechecks(content_str: str, filename: str, db: Session, current_user: User) -> None:
     """
     Full prerequisite pipeline for Transform, in order — mirrors the
     intended platform workflow: Message Description exists (and is
@@ -2130,6 +2616,14 @@ def _run_transform_prechecks(content_str: str, filename: str, db: Session) -> No
     stage is a hard block, same strictness tier as "Generate MD before
     Generate Elements" elsewhere in this app — nothing here is skippable
     just because a later stage would also have caught the problem.
+
+    A failed validation (Gate 3) still blocks the transform immediately,
+    same as before, but now also persists a PendingValidationCorrection
+    row — otherwise the errors only ever existed in a toast the user
+    dismissed, with no record left that a correction was still owed. A
+    later SUCCESSFUL transform of the same mt_type/file_type by the same
+    user auto-resolves any of their still-pending rows, on the theory
+    that a corrected file passing validation IS the correction.
     """
     import tempfile, os
     from app.models.message_description import MessageDescription
@@ -2178,17 +2672,43 @@ def _run_transform_prechecks(content_str: str, filename: str, db: Session) -> No
 
     if not result.get('is_valid'):
         errors = result.get('errors') or []
+        warnings = result.get('warnings') or []
         summary = '; '.join(
             f"{e.get('field')}: {', '.join(e.get('errors') or [])}" for e in errors[:5]
         )
+        from app.models.pending_validation_correction import PendingValidationCorrection
+        db.add(PendingValidationCorrection(
+            mt_type=result.get('mt_type') or 'UNKNOWN',
+            file_type=result.get('file_type') or 'UNKNOWN',
+            original_filename=filename,
+            errors=errors,
+            warnings=warnings,
+            failed_count=result.get('summary', {}).get('failed', len(errors)),
+            status='pending',
+            submitted_by=current_user.id,
+        ))
+        db.commit()
         raise HTTPException(
             status_code=400,
             detail=(
                 f"File failed validation against the {result.get('mt_type')} reference standard "
                 f"({result.get('summary', {}).get('failed', len(errors))} field(s) failed) — "
-                f"correct the file before transforming it. {summary}"
+                f"correct the file before transforming it. {summary}. Check Pending Transactions for a record of this correction."
             )
         )
+
+    # Validation passed — a corrected file passing IS the correction, so
+    # auto-resolve any of this user's still-pending rows for the same
+    # mt_type/file_type rather than leaving them stuck at "pending" forever.
+    from app.models.pending_validation_correction import PendingValidationCorrection
+    from datetime import datetime as _datetime
+    db.query(PendingValidationCorrection).filter(
+        PendingValidationCorrection.submitted_by == current_user.id,
+        PendingValidationCorrection.mt_type == result.get('mt_type'),
+        PendingValidationCorrection.file_type == result.get('file_type'),
+        PendingValidationCorrection.status == 'pending'
+    ).update({'status': 'resolved', 'resolved_at': _datetime.utcnow()})
+    db.commit()
 
 
 def _validate_output_optional(content_str: str, filename: str, db: Session) -> Optional[dict]:
@@ -2241,6 +2761,17 @@ async def transform_with_mapping(
     if not mapping:
         raise HTTPException(status_code=404, detail=f"Mapping {mapping_id} not found")
 
+    # A draft/inactive mapping hasn't been reviewed and approved by an
+    # admin yet (see the maker-checker gate in mappings.py's update_mapping)
+    # — using it for a real Transform would mean production data flowing
+    # through formulas nobody has actually signed off on.
+    if mapping.status != MappingStatus.ACTIVE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"This mapping is not active yet (status: {mapping.status.value}) — "
+                   f"an administrator must approve it before it can be used for Transform."
+        )
+
     # Read the upload once — every gate below and whichever direction
     # branch runs afterward all need the content, and UploadFile's stream
     # can only be read once.
@@ -2254,7 +2785,7 @@ async def transform_with_mapping(
     # Validation Rules exist -> file passes validation -> (below) Mapping
     # Elements exist. Each is a hard block on its own, not just a
     # best-effort check — see _run_transform_prechecks's docstring.
-    _run_transform_prechecks(content_str, file.filename, db)
+    _run_transform_prechecks(content_str, file.filename, db, current_user)
 
     # Get MappingElements — the "Mapping Formula exists" gate, checked
     # last per the intended workflow order since it's a property of the
@@ -2270,7 +2801,7 @@ async def transform_with_mapping(
     is_iso_to_mt = not mapping.source.upper().startswith('MT')
 
     if is_iso_to_mt:
-        return await _transform_xml_to_mt_with_mapping(mapping, elements, content_str, db)
+        return await _transform_xml_to_mt_with_mapping(mapping, elements, content_str, db, current_user, file.filename)
 
     # Save file temporarily then parse
     import tempfile, os
@@ -2291,6 +2822,12 @@ async def transform_with_mapping(
     source_fields = extract_source_fields(mt_blocks)
 
     logger.info(f"Parsed SWIFT file: {len(source_fields)} source fields")
+
+    # Duplicate detection, then sanctions/PEP screening — both checked
+    # before any mapping work so a blocked transaction doesn't waste
+    # effort building XML that will never be returned.
+    _check_duplicate_reference(db, current_user, mapping.source.upper(), source_fields, file.filename)
+    pep_hit = _check_sanctions_and_pep(db, current_user, mapping.source.upper(), source_fields, file.filename)
 
     # Build target data dict by evaluating each MappingElement expression
     target_data = {}
@@ -2393,6 +2930,8 @@ async def transform_with_mapping(
     ordered_data.update(target_data)
     target_data = ordered_data
 
+    _check_large_amount_flag(db, current_user, mapping.source.upper(), source_fields, file.filename)
+
     # Get ISO namespace and root element
     iso_target = mapping.target
     namespace = ISO_NAMESPACES.get(iso_target, ISO_NAMESPACES['camt.054.001.08'])
@@ -2438,6 +2977,85 @@ async def transform_with_mapping(
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(xml_content)
     logger.info(f"✅ Saved output: {filename}")
+
+    # Record this reference now that the transform has actually
+    # succeeded — see _record_processed_transaction's docstring for why
+    # this isn't done earlier, alongside the duplicate check itself.
+    _record_processed_transaction(db, current_user, mapping.source.upper(), source_fields, file.filename)
+
+    # Multi-level approval by threshold — the output already exists on
+    # disk at this point, but a high-value transaction doesn't get
+    # RELEASED (returned to the browser) until enough different admins
+    # approve it. Below LARGE_AMOUNT_THRESHOLD this is skipped entirely
+    # and behaves exactly as before.
+    required_approvals = _required_approvals_for_amount(db, mapping.source.upper(), source_fields)
+    if required_approvals:
+        from app.models.pending_transaction import PendingTransactionApproval
+        from app.models.notification import Notification
+        from app.services.audit_service import log_action
+        parsed_amount = _extract_32a_amount(source_fields)
+        amount_str, currency_str = (f"{parsed_amount[0]:,.2f}", parsed_amount[1]) if parsed_amount else (None, None)
+        reference = (source_fields.get('20') or '').strip() or None
+
+        txn = PendingTransactionApproval(
+            mapping_id=mapping.id, mt_type=mapping.source.upper(), reference=reference,
+            amount=amount_str, currency=currency_str, output_filename=filename,
+            required_approvals=required_approvals, status="pending", submitted_by=current_user.id,
+        )
+        db.add(txn)
+        log_action(
+            db, current_user, action="hold_for_approval", entity_type="PendingTransactionApproval",
+            details=f"Held \"{filename}\" ({amount_str} {currency_str}) — needs {required_approvals} approval(s)"
+        )
+        for admin in db.query(User).filter(User.is_admin.is_(True), User.id != current_user.id).all():
+            db.add(Notification(
+                user_id=admin.id,
+                message=f"🔒 {current_user.username}'s transform of \"{file.filename}\" ({amount_str} {currency_str}) needs {required_approvals} approval(s) before release.",
+                link="/pending-transactions"
+            ))
+        db.commit()
+        db.refresh(txn)
+        return JSONResponse(status_code=202, content={
+            "held_for_approval": True,
+            "transaction_id": txn.id,
+            "required_approvals": required_approvals,
+            "message": f"This transaction ({amount_str} {currency_str}) exceeds the approval threshold and requires {required_approvals} admin approval(s) before the file is released. Check Pending Transactions for status."
+        })
+    elif pep_hit:
+        from app.models.pending_transaction import PendingTransactionApproval
+        from app.models.notification import Notification
+        from app.models.user import User as _User
+        from app.services.audit_service import log_action
+        parsed_amount = _extract_32a_amount(source_fields)
+        amount_str, currency_str = (f"{parsed_amount[0]:,.2f}", parsed_amount[1]) if parsed_amount else (None, None)
+        reference = (source_fields.get('20') or '').strip() or None
+        reason = f"PEP match: {pep_hit['role']} \"{pep_hit['name']}\" (watchlist entry \"{pep_hit['matched']}\")"
+
+        txn = PendingTransactionApproval(
+            mapping_id=mapping.id, mt_type=mapping.source.upper(), reference=reference,
+            amount=amount_str, currency=currency_str, output_filename=filename,
+            required_approvals=1, approver_role="compliance_officer", pending_reason=reason,
+            status="pending", submitted_by=current_user.id,
+        )
+        db.add(txn)
+        log_action(
+            db, current_user, action="pep_hold", entity_type="PendingTransactionApproval",
+            details=f"Held \"{filename}\" for compliance review — {reason}"
+        )
+        for officer in db.query(_User).filter(_User.is_compliance_officer.is_(True), _User.id != current_user.id).all():
+            db.add(Notification(
+                user_id=officer.id,
+                message=f"⚠️ PEP match: {current_user.username}'s transform of \"{file.filename}\" — {pep_hit['role']} \"{pep_hit['name']}\" needs compliance review before release.",
+                link="/pending-transactions"
+            ))
+        db.commit()
+        db.refresh(txn)
+        return JSONResponse(status_code=202, content={
+            "held_for_approval": True,
+            "transaction_id": txn.id,
+            "required_approvals": 1,
+            "message": f"{reason}. This requires enhanced due diligence review by a compliance officer before the file is released. Check Pending Transactions for status."
+        })
 
     # "Validate Generated Output (Optional)" — informational only, never
     # blocks returning the file the transform already successfully

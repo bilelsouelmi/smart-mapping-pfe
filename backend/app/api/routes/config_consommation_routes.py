@@ -169,6 +169,18 @@ async def delete_pipeline(
     p = db.query(Pipeline).filter(Pipeline.id == pipeline_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Pipeline not found")
+
+    # A failed-delivery run (PendingDeliveryRetry) can still point at this
+    # pipeline via a nullable pipeline_id — informational only
+    # (pipeline_name is stored on the row itself for exactly this reason),
+    # so the retry record survives; only the dangling pointer needs
+    # clearing. Left as-is, that FK blocks the delete with an unhandled
+    # 500 instead of this clean response.
+    from app.models.pending_delivery_retry import PendingDeliveryRetry
+    db.query(PendingDeliveryRetry).filter(
+        PendingDeliveryRetry.pipeline_id == pipeline_id
+    ).update({PendingDeliveryRetry.pipeline_id: None}, synchronize_session=False)
+
     db.delete(p)
     db.commit()
     return {"message": "Pipeline deleted"}
@@ -251,6 +263,128 @@ async def run_pipeline(
     the background scheduler (see _pipeline_scheduler_loop), so a manual
     click and an automatic tick behave identically."""
     return await _execute_pipeline(pipeline_id, db)
+
+
+async def _deliver_to_config_out(config_out, output_body: bytes, input_filename_base: str, iso_target_name: str) -> tuple:
+    """
+    The actual Config OUT delivery for one transport type — extracted out
+    of _execute_pipeline so PendingDeliveryRetry's retry endpoint can
+    redeliver the SAME already-transformed content through the SAME
+    per-transport logic, instead of a second copy that could silently
+    drift from what a normal pipeline run does. Returns (status, message),
+    exactly what used to be written straight into step3.
+    """
+    if config_out.transport_type == "FILE":
+        try:
+            is_xml_output = output_body.strip().startswith(b"<?xml")
+            if config_out.file_output_path:
+                out_path = config_out.file_output_path
+            elif is_xml_output:
+                out_path = str(Path(settings.UPLOAD_DIR) / "out" / "xml")
+            else:
+                out_path = str(Path(settings.UPLOAD_DIR) / "out" / "mt")
+
+            os.makedirs(out_path, exist_ok=True)
+            timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+            ext = ".xml" if is_xml_output else ".txt"
+            if is_xml_output:
+                out_filename = f"{input_filename_base}_{iso_target_name}_{timestamp}{ext}"
+            else:
+                out_filename = f"{input_filename_base}_MT_{timestamp}{ext}"
+            out_file = os.path.join(out_path, out_filename)
+            with open(out_file, "wb") as f:
+                f.write(output_body)
+            return "ok", f"{'XML' if is_xml_output else 'MT'} saved to {out_file}"
+        except Exception as e:
+            return "error", str(e)
+
+    elif config_out.transport_type == "REST":
+        try:
+            import httpx
+            headers = dict(config_out.rest_headers or {})
+            headers["Content-Type"] = "application/xml"
+            if config_out.rest_auth_type == "BEARER" and config_out.rest_auth_value:
+                headers["Authorization"] = f"Bearer {config_out.rest_auth_value}"
+            elif config_out.rest_auth_type == "BASIC" and config_out.rest_auth_value:
+                headers["Authorization"] = f"Basic {config_out.rest_auth_value}"
+            method = (config_out.rest_method or "POST").upper()
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await getattr(client, method.lower())(
+                    config_out.rest_url,
+                    content=output_body,
+                    headers=headers
+                )
+            status = "ok" if response.status_code < 400 else "error"
+            message = (
+                f"XML sent via {method} to '{config_out.rest_url}' "
+                f"— HTTP {response.status_code} ({len(output_body)} bytes)"
+            )
+            return status, message
+        except Exception as e:
+            return "error", f"REST web service error: {str(e)}"
+
+    elif config_out.transport_type == "RABBITMQ":
+        try:
+            import pika
+            credentials = pika.PlainCredentials(
+                config_out.rabbitmq_username or "guest",
+                config_out.rabbitmq_password or "guest"
+            )
+            params = pika.ConnectionParameters(
+                host=config_out.rabbitmq_host or "localhost",
+                port=config_out.rabbitmq_port or 5672,
+                virtual_host=config_out.rabbitmq_vhost or "/",
+                credentials=credentials,
+                connection_attempts=1, socket_timeout=3
+            )
+            conn    = pika.BlockingConnection(params)
+            channel = conn.channel()
+            channel.queue_declare(
+                queue=config_out.rabbitmq_queue or "swift.out",
+                durable=True
+            )
+            channel.basic_publish(
+                exchange=config_out.rabbitmq_exchange or "",
+                routing_key=config_out.rabbitmq_queue or "swift.out",
+                body=output_body
+            )
+            conn.close()
+            message = (
+                f"XML published to RabbitMQ queue "
+                f"'{config_out.rabbitmq_queue}' ({len(output_body)} bytes)"
+            )
+            return "ok", message
+        except Exception as e:
+            return "error", str(e)
+
+    elif config_out.transport_type == "KAFKA":
+        try:
+            from kafka import KafkaProducer
+            kafka_config = {
+                "bootstrap_servers": config_out.kafka_bootstrap_servers or "localhost:9092",
+                "security_protocol": config_out.kafka_security_protocol or "PLAINTEXT",
+            }
+            if config_out.kafka_security_protocol in ("SASL_PLAINTEXT", "SASL_SSL"):
+                kafka_config["sasl_mechanism"]      = config_out.kafka_sasl_mechanism or "PLAIN"
+                kafka_config["sasl_plain_username"] = config_out.kafka_sasl_username or ""
+                kafka_config["sasl_plain_password"] = config_out.kafka_sasl_password or ""
+            producer = KafkaProducer(**kafka_config)
+            future = producer.send(
+                config_out.kafka_topic or "swift.out",
+                value=output_body
+            )
+            future.get(timeout=5)
+            producer.flush()
+            producer.close()
+            message = (
+                f"XML published to Kafka topic "
+                f"'{config_out.kafka_topic}' ({len(output_body)} bytes)"
+            )
+            return "ok", message
+        except Exception as e:
+            return "error", f"Kafka error: {str(e)}"
+
+    return "skipped", "Unknown or unconfigured Config OUT transport type"
 
 
 async def _execute_pipeline(pipeline_id: int, db: Session) -> dict:
@@ -427,120 +561,48 @@ async def _execute_pipeline(pipeline_id: int, db: Session) -> dict:
     output_body = transformed_content.encode("utf-8")
 
     if config_out:
+        status, message = await _deliver_to_config_out(
+            config_out, output_body, input_filename_base, iso_target_name
+        )
+        step3["status"] = status
+        step3["message"] = message
 
-        if config_out.transport_type == "FILE":
-            try:
-                is_xml_output = transformed_content and transformed_content.strip().startswith("<?xml")
-                if config_out.file_output_path:
-                    out_path = config_out.file_output_path
-                elif is_xml_output:
-                    out_path = str(Path(settings.UPLOAD_DIR) / "out" / "xml")
-                else:
-                    out_path = str(Path(settings.UPLOAD_DIR) / "out" / "mt")
-
-                os.makedirs(out_path, exist_ok=True)
-                timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
-                ext = ".xml" if is_xml_output else ".txt"
-                if is_xml_output:
-                    out_filename = f"{input_filename_base}_{iso_target_name}_{timestamp}{ext}"
-                else:
-                    out_filename = f"{input_filename_base}_MT_{timestamp}{ext}"
-                out_file = os.path.join(out_path, out_filename)
-                with open(out_file, "wb") as f:
-                    f.write(output_body)
-                step3["status"]  = "ok"
-                step3["message"] = f"{'XML' if is_xml_output else 'MT'} saved to {out_file}"
-            except Exception as e:
-                step3["status"]  = "error"
-                step3["message"] = str(e)
-
-        elif config_out.transport_type == "REST":
-            try:
-                import httpx
-                headers = dict(config_out.rest_headers or {})
-                headers["Content-Type"] = "application/xml"
-                if config_out.rest_auth_type == "BEARER" and config_out.rest_auth_value:
-                    headers["Authorization"] = f"Bearer {config_out.rest_auth_value}"
-                elif config_out.rest_auth_type == "BASIC" and config_out.rest_auth_value:
-                    headers["Authorization"] = f"Basic {config_out.rest_auth_value}"
-                method = (config_out.rest_method or "POST").upper()
-                async with httpx.AsyncClient(timeout=10) as client:
-                    response = await getattr(client, method.lower())(
-                        config_out.rest_url,
-                        content=output_body,
-                        headers=headers
-                    )
-                step3["status"]  = "ok" if response.status_code < 400 else "error"
-                step3["message"] = (
-                    f"XML sent via {method} to '{config_out.rest_url}' "
-                    f"— HTTP {response.status_code} ({len(output_body)} bytes)"
-                )
-            except Exception as e:
-                step3["status"]  = "error"
-                step3["message"] = f"REST web service error: {str(e)}"
-
-        elif config_out.transport_type == "RABBITMQ":
-            try:
-                import pika
-                credentials = pika.PlainCredentials(
-                    config_out.rabbitmq_username or "guest",
-                    config_out.rabbitmq_password or "guest"
-                )
-                params = pika.ConnectionParameters(
-                    host=config_out.rabbitmq_host or "localhost",
-                    port=config_out.rabbitmq_port or 5672,
-                    virtual_host=config_out.rabbitmq_vhost or "/",
-                    credentials=credentials,
-                    connection_attempts=1, socket_timeout=3
-                )
-                conn    = pika.BlockingConnection(params)
-                channel = conn.channel()
-                channel.queue_declare(
-                    queue=config_out.rabbitmq_queue or "swift.out",
-                    durable=True
-                )
-                channel.basic_publish(
-                    exchange=config_out.rabbitmq_exchange or "",
-                    routing_key=config_out.rabbitmq_queue or "swift.out",
-                    body=output_body
-                )
-                conn.close()
-                step3["status"]  = "ok"
-                step3["message"] = (
-                    f"XML published to RabbitMQ queue "
-                    f"'{config_out.rabbitmq_queue}' ({len(output_body)} bytes)"
-                )
-            except Exception as e:
-                step3["status"]  = "error"
-                step3["message"] = str(e)
-
-        elif config_out.transport_type == "KAFKA":
-            try:
-                from kafka import KafkaProducer
-                kafka_config = {
-                    "bootstrap_servers": config_out.kafka_bootstrap_servers or "localhost:9092",
-                    "security_protocol": config_out.kafka_security_protocol or "PLAINTEXT",
-                }
-                if config_out.kafka_security_protocol in ("SASL_PLAINTEXT", "SASL_SSL"):
-                    kafka_config["sasl_mechanism"]      = config_out.kafka_sasl_mechanism or "PLAIN"
-                    kafka_config["sasl_plain_username"] = config_out.kafka_sasl_username or ""
-                    kafka_config["sasl_plain_password"] = config_out.kafka_sasl_password or ""
-                producer = KafkaProducer(**kafka_config)
-                future = producer.send(
-                    config_out.kafka_topic or "swift.out",
-                    value=output_body
-                )
-                future.get(timeout=5)
-                producer.flush()
-                producer.close()
-                step3["status"]  = "ok"
-                step3["message"] = (
-                    f"XML published to Kafka topic "
-                    f"'{config_out.kafka_topic}' ({len(output_body)} bytes)"
-                )
-            except Exception as e:
-                step3["status"]  = "error"
-                step3["message"] = f"Kafka error: {str(e)}"
+        # Delivery failed but the transform itself (step2) succeeded — the
+        # audit copy on disk is the only surviving record of this output
+        # for a Kafka/RabbitMQ-sourced run (that message is already gone
+        # from the source queue by now). Persist a retry row so this isn't
+        # silently lost; see PendingDeliveryRetry's docstring.
+        if status == "error" and step2.get("output_filename"):
+            from app.models.pending_delivery_retry import PendingDeliveryRetry
+            # The source file is deliberately left in place on failure (see
+            # the "Only move on a clean success" comment below), so the
+            # background scheduler picks the SAME still-stuck delivery back
+            # up every ~30s. Without this lookup, each poll tick inserted a
+            # brand new row instead of updating the existing one — a wrong
+            # Config OUT URL left running would silently pile up dozens of
+            # duplicate "pending" entries for what is really just one
+            # unresolved delivery, exactly like a manual Retry click already
+            # updates attempt_count on the same row instead of duplicating it.
+            existing_retry = db.query(PendingDeliveryRetry).filter(
+                PendingDeliveryRetry.pipeline_id == p.id,
+                PendingDeliveryRetry.status == "pending"
+            ).first()
+            if existing_retry:
+                existing_retry.attempt_count += 1
+                existing_retry.output_filename = step2["output_filename"]
+                existing_retry.error_message = message
+                existing_retry.last_attempt_at = datetime.utcnow()
+            else:
+                db.add(PendingDeliveryRetry(
+                    pipeline_id=p.id,
+                    pipeline_name=p.name,
+                    config_out_id=config_out.id,
+                    transport_type=config_out.transport_type,
+                    output_filename=step2["output_filename"],
+                    error_message=message,
+                    status="pending",
+                ))
+            db.commit()
 
     results["steps"].append(step3)
 

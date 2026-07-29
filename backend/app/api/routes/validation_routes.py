@@ -153,7 +153,8 @@ async def import_rules_from_md(
             fin_format=elem.fin_format,
             pattern=elem.pattern,
             element_type=elem.element_type,
-            description=elem.description
+            description=elem.description,
+            reference_category=elem.reference_category
         )
         db.add(rule)
         created += 1
@@ -174,7 +175,8 @@ async def import_rules_from_md(
                     fin_format=elem.fin_format,
                     pattern=elem.pattern,
                     element_type=elem.element_type,
-                    description=elem.description
+                    description=elem.description,
+                    reference_category=elem.reference_category
                 )
                 db.add(base_rule)
                 created += 1
@@ -294,7 +296,7 @@ def validate_file_at_path(file_path: str, file_name: str, db: Session) -> dict:
                 )
 
             field_map = _build_field_map(mt_blocks)
-            errors, warnings, passed = _run_validation(rules, field_map, mt_type, is_mt_text=True)
+            errors, warnings, passed = _run_validation(rules, field_map, mt_type, is_mt_text=True, db=db)
 
             return {
                 "mt_type": mt_type,
@@ -408,7 +410,7 @@ def validate_file_at_path(file_path: str, file_name: str, db: Session) -> dict:
                 # Store without colon prefix for SWIFT-style tags: ":20" -> "20"
                 if k_str.startswith(':'):
                     field_map[k_str.lstrip(':')] = v
-            errors, warnings, passed = _run_validation(rules, field_map, pseudo_mt_type, is_mt_text=False)
+            errors, warnings, passed = _run_validation(rules, field_map, pseudo_mt_type, is_mt_text=False, db=db)
 
             return {
                 "mt_type": pseudo_mt_type,
@@ -436,11 +438,32 @@ def validate_file_at_path(file_path: str, file_name: str, db: Session) -> dict:
 
 # ── Shared validation logic ───────────────────────────────────────────────────
 
-def _run_validation(rules, field_map, mt_type, is_mt_text: bool = False):
+def _run_validation(rules, field_map, mt_type, is_mt_text: bool = False, db: Session = None):
     """Run all rules against a field_map. Returns (errors, warnings, passed)."""
     errors = []
     warnings = []
     passed = []
+
+    # Fetched once per validation run (not once per field) since it's the
+    # same lookups regardless of which rule is being checked. Always
+    # includes CHARGE_CODE (the pre-existing hardcoded :71A: check) plus
+    # whatever other categories these specific rules actually opt into via
+    # reference_category (e.g. ISO_CURRENCY, COUNTRY). A category with no
+    # active rows (or no db passed) is absent from the map — _validate_field
+    # falls back to the original hardcoded charge-code set for CHARGE_CODE,
+    # and skips the check entirely for any other category, so deleting every
+    # row of a list can't silently turn that particular check off/on.
+    reference_data_by_category = {}
+    if db is not None:
+        from app.models.reference_data import ReferenceData
+        categories_needed = {'CHARGE_CODE'} | {r.reference_category for r in rules if r.reference_category}
+        rows = db.query(ReferenceData.category, ReferenceData.code).filter(
+            ReferenceData.category.in_(categories_needed), ReferenceData.is_active == True  # noqa: E712
+        ).all()
+        for cat, code in rows:
+            reference_data_by_category.setdefault(cat, set()).add(code)
+
+    valid_charge_codes = reference_data_by_category.get('CHARGE_CODE') or None
 
     SENTINEL = object()
 
@@ -488,7 +511,10 @@ def _run_validation(rules, field_map, mt_type, is_mt_text: bool = False):
             }
         }
 
-        field_errors = _validate_field(rule, value)
+        field_errors = _validate_field(
+            rule, value, valid_charge_codes=valid_charge_codes,
+            reference_data_by_category=reference_data_by_category
+        )
 
         if field_errors:
             result_item["errors"] = field_errors
@@ -578,7 +604,14 @@ def _build_field_map(mt_blocks: dict) -> dict:
     return field_map
 
 
-def _validate_field(rule: ValidationRule, value) -> List[str]:
+_REFERENCE_CATEGORY_LABELS = {
+    'ISO_CURRENCY': 'currency',
+    'COUNTRY': 'country',
+    'CHARGE_CODE': 'charge',
+}
+
+
+def _validate_field(rule: ValidationRule, value, valid_charge_codes=None, reference_data_by_category=None) -> List[str]:
     """Validate a single field value against its rule."""
     errors = []
 
@@ -599,6 +632,21 @@ def _validate_field(rule: ValidationRule, value) -> List[str]:
         return []
 
     str_val = str(value).strip()
+
+    # ── Generic Reference Data lookup (opt-in per rule via reference_category,
+    # e.g. a :32A: sub-field's Currency copied through from its source
+    # MessageDescriptionElement) — checked before the tag-specific rules
+    # below so an unknown code is reported without also running whatever
+    # format check that tag happens to have. A category with no active
+    # rows at all (missing from the map) is treated as "not enforced yet"
+    # rather than "everything is invalid", same reasoning as CHARGE_CODE's
+    # existing fallback.
+    if rule.reference_category and reference_data_by_category is not None:
+        valid_codes = reference_data_by_category.get(rule.reference_category)
+        if valid_codes is not None and str_val not in valid_codes:
+            label = _REFERENCE_CATEGORY_LABELS.get(rule.reference_category, rule.reference_category.lower())
+            errors.append(f"Unknown {label} code. Got: '{str_val}'")
+            return errors
 
     # ── SWIFT field-specific validations (per SWIFT Standards Reference Guide) ─
     import re as _re2
@@ -634,10 +682,14 @@ def _validate_field(rule: ValidationRule, value) -> List[str]:
             errors.append(f"Field :23B: invalid code '{str_val}'. Valid: {', '.join(sorted(valid_23b))}")
             return errors
 
-    # 3. Details of Charges (:71A:) — format 3!a — exactly SHA, OUR or BEN
+    # 3. Details of Charges (:71A:) — format 3!a — driven by the
+    # admin-editable "Charge Code" Reference Data list (falls back to the
+    # original hardcoded SHA/OUR/BEN if that list is empty/unavailable,
+    # so deleting every row can't silently disable this check).
     if clean_tag == '71A':
-        if str_val not in ('SHA', 'OUR', 'BEN'):
-            errors.append(f"Field :71A: must be SHA, OUR, or BEN. Got: '{str_val}'")
+        codes = valid_charge_codes or {'SHA', 'OUR', 'BEN'}
+        if str_val not in codes:
+            errors.append(f"Field :71A: must be {', '.join(sorted(codes))}. Got: '{str_val}'")
             return errors
 
     # 4. Date sub-fields — format 6!n — YYMMDD
@@ -730,7 +782,12 @@ def _check_fin_format_type_only(value: str, fin_format: str) -> str:
         elif ftype == 'a' and not value.isalpha():
             return f"Expected alphabetic value (fin_format: {fin_format}), got '{value}'"
         elif ftype == 'd':
-            if not re.match(r'^\d+,?\d*$', value):
+            # Accept both separators: raw SWIFT text uses a comma (e.g.
+            # "4200,00"), but swift_txt_parser's _parse_sub_fields already
+            # normalizes composite sub-fields like :32A:'s Amount to a dot
+            # before storing the value — matches _check_type's DECIMAL
+            # branch below, which already accepted both.
+            if not re.match(r'^\d+[,.]?\d*$', value):
                 return f"Expected decimal value (fin_format: {fin_format}), got '{value}'"
     except Exception:
         pass
@@ -758,7 +815,12 @@ def _check_fin_format(value: str, fin_format: str) -> str:
         elif ftype == 'a' and not value.isalpha():
             return f"Expected alphabetic value (fin_format: {fin_format}), got '{value}'"
         elif ftype == 'd':
-            if not re.match(r'^\d+,?\d*$', value):
+            # Accept both separators: raw SWIFT text uses a comma (e.g.
+            # "4200,00"), but swift_txt_parser's _parse_sub_fields already
+            # normalizes composite sub-fields like :32A:'s Amount to a dot
+            # before storing the value — matches _check_type's DECIMAL
+            # branch below, which already accepted both.
+            if not re.match(r'^\d+[,.]?\d*$', value):
                 return f"Expected decimal value (fin_format: {fin_format}), got '{value}'"
 
     except Exception:

@@ -46,6 +46,22 @@ const OutputsPage = () => {
     }
   };
 
+  const [deleting, setDeleting] = useState(null);
+
+  const handleDelete = async (filename) => {
+    if (!window.confirm(`Delete "${filename}"? This cannot be undone.`)) return;
+    setDeleting(filename);
+    try {
+      await axios.delete(`${API}/transform/outputs/${encodeURIComponent(filename)}`);
+      setOutputs(prev => prev.filter(o => o.filename !== filename));
+      toast.success('Output deleted');
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Delete failed');
+    } finally {
+      setDeleting(null);
+    }
+  };
+
   const getFileIcon = (filename) => {
     if (filename.endsWith('.xml')) return '🏦';
     if (filename.endsWith('.txt')) return '📄';
@@ -110,7 +126,7 @@ const OutputsPage = () => {
               <div>No outputs yet. Run a Transform from the Mapping page, or a Pipeline from Consommation.</div>
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxHeight: '70vh', overflowY: 'auto' }}>
               {outputs.map((output, idx) => (
                 <motion.div key={idx} initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: idx * 0.05 }}
@@ -139,13 +155,26 @@ const OutputsPage = () => {
                       </span>
                     </div>
                   </div>
-                  <button onClick={() => handleDownload(output.filename)} style={{
-                    padding: '6px 14px',
-                    background: 'linear-gradient(135deg, #22c55e, #16a34a)',
-                    color: 'white', border: 'none', borderRadius: '8px',
-                    fontSize: '0.85rem', fontWeight: '600', cursor: 'pointer' }}>
-                    ⬇️ Download
-                  </button>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button onClick={() => handleDownload(output.filename)} style={{
+                      padding: '6px 14px',
+                      background: 'linear-gradient(135deg, #22c55e, #16a34a)',
+                      color: 'white', border: 'none', borderRadius: '8px',
+                      fontSize: '0.85rem', fontWeight: '600', cursor: 'pointer' }}>
+                      ⬇️ Download
+                    </button>
+                    <button onClick={() => handleDelete(output.filename)}
+                      disabled={deleting === output.filename}
+                      style={{
+                        padding: '6px 14px',
+                        background: 'rgba(239,68,68,0.15)', color: '#f87171',
+                        border: '1px solid rgba(239,68,68,0.3)', borderRadius: '8px',
+                        fontSize: '0.85rem', fontWeight: '600',
+                        cursor: deleting === output.filename ? 'not-allowed' : 'pointer',
+                        opacity: deleting === output.filename ? 0.6 : 1 }}>
+                      {deleting === output.filename ? '…' : '🗑️ Delete'}
+                    </button>
+                  </div>
                 </motion.div>
               ))}
             </div>

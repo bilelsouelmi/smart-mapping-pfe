@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -9,6 +10,7 @@ import Layout from '../components/Layout';
 import WorkflowSteps from '../components/WorkflowSteps';
 import SuggestionCard from '../components/SuggestionCard';
 import MTBlockReview from '../components/MTBlockReview';
+import { useAuth } from '../contexts/AuthContext';
 import API_BASE_URL from '../config/api';
 
 const API = `${API_BASE_URL}/api`;
@@ -19,6 +21,7 @@ const ELEMENT_STATUSES = ['pending', 'mapped', 'skipped'];
 const isMtType = (v) => (v || '').toUpperCase().startsWith('MT');
 
 const MappingWorkspacePage = () => {
+  const { user } = useAuth();
   // ── Mapping list / elements state ──────────────────────────────────────────
   const [mappings, setMappings] = useState([]);
   const [selectedMapping, setSelectedMapping] = useState(null);
@@ -48,6 +51,7 @@ const MappingWorkspacePage = () => {
   const [transformFile, setTransformFile] = useState(null);
   const [transforming, setTransforming] = useState(false);
   const [transformResult, setTransformResult] = useState(null);
+  const [transformHeld, setTransformHeld] = useState(null);
   const [transformError, setTransformError] = useState('');
 
   useEffect(() => {
@@ -93,6 +97,21 @@ const MappingWorkspacePage = () => {
   };
 
   // ── Mapping CRUD ────────────────────────────────────────────────────────────
+  const [activating, setActivating] = useState(false);
+  const handleActivateMapping = async (m) => {
+    if (!window.confirm(`Activate "${m.name}"? This makes it usable for real Transforms.`)) return;
+    setActivating(true);
+    try {
+      const r = await axios.put(`${API}/mappings/${m.id}`, { status: 'active' });
+      setSelectedMapping(r.data);
+      fetchMappings();
+    } catch (e) {
+      alert('❌ ' + (e.response?.data?.detail || 'Activation failed'));
+    } finally {
+      setActivating(false);
+    }
+  };
+
   const handleDeleteMapping = async (id) => {
     if (!window.confirm('Delete this mapping and all its elements?')) return;
     try {
@@ -139,6 +158,7 @@ const MappingWorkspacePage = () => {
     setTransforming(true);
     setTransformError('');
     setTransformResult(null);
+    setTransformHeld(null);
     try {
       const formData = new FormData();
       formData.append('file', transformFile);
@@ -146,6 +166,19 @@ const MappingWorkspacePage = () => {
         headers: { 'Content-Type': 'multipart/form-data' },
         responseType: 'blob'
       });
+
+      // Amount above the approval threshold — the endpoint returns 202 +
+      // JSON instead of the XML file (see transform_mapping.py's
+      // required_approvals hold). responseType:'blob' means axios hands
+      // us a Blob either way, so branch on content-type instead of
+      // trying to detect it from the (blob) body shape.
+      const contentType = r.headers['content-type'] || '';
+      if (contentType.includes('application/json')) {
+        const heldData = JSON.parse(await r.data.text());
+        setTransformHeld(heldData);
+        return;
+      }
+
       const blob = new Blob([r.data], { type: r.headers['content-type'] || 'application/octet-stream' });
       const url = URL.createObjectURL(blob);
       const disposition = r.headers['content-disposition'] || '';
@@ -220,6 +253,11 @@ const MappingWorkspacePage = () => {
     setUploading(true);
     const formData = new FormData();
     formData.append('file', file);
+    // This is a throwaway "just give me column suggestions" call, not an
+    // attempt to create a new reference Message Description — re-analyzing
+    // a file whose MD is already approved/pending (e.g. re-testing the
+    // same sample) must not be blocked by that unrelated duplicate check.
+    formData.append('skip_duplicate_check', 'true');
     try {
       const response = await axios.post(`${API}/files/analyze`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -487,7 +525,7 @@ const MappingWorkspacePage = () => {
                     No mappings yet
                   </div>
                 ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '70vh', overflowY: 'auto' }}>
                     {mappings.map(m => (
                       <div key={m.id}
                         onClick={() => setSelectedMapping(m)}
@@ -552,8 +590,23 @@ const MappingWorkspacePage = () => {
                       }}>
                         {isMtType(selectedMapping.source) ? 'MT → ISO 20022' : 'ISO 20022 → MT'}
                       </span>
+                      <span style={{
+                        padding: '2px 10px', borderRadius: '20px', fontSize: '10px', fontWeight: '700',
+                        background: `${statusColor(selectedMapping.status)}20`, color: statusColor(selectedMapping.status)
+                      }}>
+                        {selectedMapping.status}
+                      </span>
                     </div>
                     <div style={{ display: 'flex', gap: '8px' }}>
+                      {/* Maker-checker: a draft/inactive mapping isn't
+                          usable for Transform yet (see the status check in
+                          transform_with_mapping) — only an admin can flip
+                          it to active, once someone's actually reviewed
+                          its formulas. */}
+                      {selectedMapping.status !== 'active' && user?.is_admin && (
+                        <ActionBtn icon={<Check size={13} />} label={activating ? 'Activating...' : 'Activate'} color="#10b981"
+                          onClick={() => handleActivateMapping(selectedMapping)} disabled={activating} />
+                      )}
                       <ActionBtn icon={<Plus size={13} />} label="Add Element" color="#667eea"
                         onClick={() => { setModalMode('create'); setModalElement(null); setShowElementModal(true); }} />
                       <ActionBtn icon={<Zap size={13} />} label="Generate Elements" color="#f472b6"
@@ -585,6 +638,26 @@ const MappingWorkspacePage = () => {
                       </div>
                       {transformError && (
                         <div style={{ marginTop: '0.75rem', color: '#fca5a5', fontSize: '13px' }}>❌ {transformError}</div>
+                      )}
+                      {transformHeld && (
+                        <div style={{
+                          marginTop: '1rem', padding: '12px 14px', borderRadius: '8px',
+                          background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)'
+                        }}>
+                          <div style={{ color: '#fbbf24', fontSize: '13px', fontWeight: '700', marginBottom: '4px' }}>
+                            🔒 Held for approval
+                          </div>
+                          <div style={{ color: '#fcd34d', fontSize: '12px', marginBottom: '8px' }}>
+                            {transformHeld.message}
+                          </div>
+                          <Link to="/pending-transactions" style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '4px 10px',
+                            background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.3)',
+                            borderRadius: '6px', color: '#fbbf24', fontSize: '12px', fontWeight: '600', textDecoration: 'none'
+                          }}>
+                            View Pending Transactions
+                          </Link>
+                        </div>
                       )}
                       {transformResult && (
                         <div style={{ marginTop: '1rem' }}>
@@ -644,7 +717,7 @@ const MappingWorkspacePage = () => {
                         <span>Actions</span>
                       </div>
 
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '55vh', overflowY: 'auto' }}>
                         {elements.map(el => (
                           <div key={el.id} style={{
                             display: 'grid', gridTemplateColumns: '1fr 1fr 2fr 80px 80px',
@@ -709,7 +782,7 @@ const MappingWorkspacePage = () => {
       <AnimatePresence>
         {showMappingModal && (
           <MappingModal mode={modalMode} mapping={modalMapping} sources={sources} targets={targets} msgDescs={msgDescs}
-            onSave={handleSaveMapping} onClose={() => setShowMappingModal(false)} />
+            isAdmin={user?.is_admin} onSave={handleSaveMapping} onClose={() => setShowMappingModal(false)} />
         )}
         {showElementModal && (
           <ElementModal mode={modalMode} element={modalElement} mappingId={selectedMapping?.id}
@@ -721,7 +794,7 @@ const MappingWorkspacePage = () => {
 };
 
 // ── Mapping Modal ─────────────────────────────────────────────────────────────
-const MappingModal = ({ mode, mapping, sources, targets, msgDescs, onSave, onClose }) => {
+const MappingModal = ({ mode, mapping, sources, targets, msgDescs, isAdmin, onSave, onClose }) => {
   const [form, setForm] = useState({
     name: mapping?.name || '',
     source: mapping?.source || '',
@@ -771,8 +844,10 @@ const MappingModal = ({ mode, mapping, sources, targets, msgDescs, onSave, onClo
             ))}
           </select>
         </FormField>
-        <FormField label="Status">
-          <select value={form.status} onChange={e => set('status', e.target.value)} style={selectStyle}>
+        <FormField label={isAdmin ? 'Status' : 'Status (admin-only — new mappings start as draft)'}>
+          <select value={form.status} disabled={!isAdmin}
+            onChange={e => set('status', e.target.value)}
+            style={{ ...selectStyle, opacity: isAdmin ? 1 : 0.5, cursor: isAdmin ? 'pointer' : 'not-allowed' }}>
             {STATUSES.map(s => <option key={s} value={s} style={{ background: '#16213e' }}>{s}</option>)}
           </select>
         </FormField>

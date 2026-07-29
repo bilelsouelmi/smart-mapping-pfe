@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, Trash2, Edit2, Play, Settings,
          ArrowDownCircle, ArrowUpCircle, Wifi, FolderOpen, Globe, Zap } from 'lucide-react';
 import Layout from '../components/Layout';
+import PasswordInput from '../components/PasswordInput';
 import API_BASE_URL from '../config/api';
 
 const API = `${API_BASE_URL}/api`;
@@ -198,7 +199,7 @@ const ConfigPage = () => {
               </div>
             </GlassCard>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', maxHeight: '65vh', overflowY: 'auto' }}>
               {filtered.map(config => {
                 const Icon  = TRANSPORT_ICONS[config.transport_type] || Settings;
                 const color = TRANSPORT_COLORS[config.transport_type] || '#6b7280';
@@ -405,7 +406,7 @@ const ConfigPage = () => {
                             placeholder="admin" style={inputStyle} />
                         </FormField>
                         <FormField label="Password *">
-                          <input type="password" value={form.rabbitmq_password}
+                          <PasswordInput value={form.rabbitmq_password}
                             onChange={e => setForm({...form, rabbitmq_password: e.target.value})}
                             placeholder="••••••••" style={inputStyle} />
                         </FormField>
@@ -475,7 +476,7 @@ const ConfigPage = () => {
                               placeholder="kafka-user" style={inputStyle} />
                           </FormField>
                           <FormField label="Password">
-                            <input type="password" value={form.kafka_sasl_password}
+                            <PasswordInput value={form.kafka_sasl_password}
                               onChange={e => setForm({...form, kafka_sasl_password: e.target.value})}
                               placeholder="••••••••" style={inputStyle} />
                           </FormField>

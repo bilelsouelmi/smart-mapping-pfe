@@ -1,6 +1,7 @@
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status
+from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import Dict, Any
+import json
 import os
 import uuid
 from pathlib import Path
@@ -76,6 +77,13 @@ async def upload_file(
 @router.post("/analyze", response_model=Dict[str, Any])
 async def analyze_file(
     file: UploadFile = File(...),
+    # The Mapping page's "AI Formula Suggestions" panel (MappingWorkspacePage.jsx's
+    # handleUpload) also calls this same endpoint, purely to get column
+    # suggestions — it has no interest in creating a durable "reference"
+    # Message Description at all, so re-analyzing a file that already has
+    # an approved/pending MD (the exact scenario the duplicate check below
+    # exists for) must NOT be blocked there.
+    skip_duplicate_check: bool = Form(False),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -201,13 +209,36 @@ async def analyze_file(
                     col_analysis['path'] = col_name
                     col_analysis['level'] = len(col_name.split('.'))
 
+        # A new draft for a (mt_type, file_type) that already has a pending
+        # or approved MD is the exact setup that caused the confusing
+        # approve/demote flip-flop between two near-identical uploads
+        # (e.g. "test mt103.txt" vs "test_mt103_pep.txt", same MT103
+        # structure). Comparing sample_data (same slice as what gets
+        # persisted below) catches genuine duplicates without blocking
+        # legitimately different samples of the same message type.
+        new_sample_data = sample_data[:10]
+        new_sample_json = json.dumps(new_sample_data, sort_keys=True)
+        existing_candidates = [] if skip_duplicate_check else db.query(MessageDescription).filter(
+            MessageDescription.mt_type == mt_type,
+            MessageDescription.file_type == file_type
+        ).all()
+        for existing in existing_candidates:
+            if json.dumps(existing.sample_data or [], sort_keys=True) == new_sample_json:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"This file's content is identical to the existing Message Description "
+                           f"\"{existing.file_name}\" (id={existing.id}, "
+                           f"{'approved' if existing.approved else 'pending approval'}). "
+                           f"Reject or approve that one first instead of creating a duplicate."
+                )
+
         message_desc = MessageDescription(
             user_id=current_user.id,
             file_name=file.filename,
             file_type=file_type,
             business_domain=analysis.get('business_domain'),
             column_structure=column_structure,
-            sample_data=sample_data[:10],
+            sample_data=new_sample_data,
             file_upload_id=file_upload.id,
             mt_type=mt_type,
             iso_target=iso_target,
@@ -341,6 +372,8 @@ async def analyze_file(
             "mt_blocks": mt_blocks
         }
 
+    except HTTPException:
+        raise
     except ValueError as e:
         logger.error(f"File processing error: {e}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

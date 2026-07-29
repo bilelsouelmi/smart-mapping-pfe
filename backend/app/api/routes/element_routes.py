@@ -6,9 +6,35 @@ from pydantic import BaseModel
 from app.database import get_db
 from app.core.deps import get_current_user
 from app.models.user import User
+from app.models.message_description import MessageDescription
 from app.models.message_description_element import MessageDescriptionElement
+from app.api.routes.message_descriptions import _consume_access_grant
 
 router = APIRouter()
+
+
+def _authorize_element_write(db: Session, current_user: User, md_id: int, action: str) -> MessageDescription:
+    """Elements are children of a MessageDescription and inherit its
+    write-permission rules — same admin-or-granted-access gate as editing
+    the MD's own fields (see message_descriptions.py's update/delete
+    routes). Without this, anyone could add/edit/delete elements on
+    someone else's approved reference — or even someone else's still-
+    pending draft — by going through this router instead of the MD's own
+    PUT/DELETE, which is exactly what was happening before this check
+    existed."""
+    md = db.query(MessageDescription).filter(MessageDescription.id == md_id).first()
+    if not md:
+        raise HTTPException(status_code=404, detail=f"MessageDescription {md_id} not found")
+    if current_user.is_admin:
+        return md
+    if md.approved is True:
+        _consume_access_grant(db, current_user, md, action)
+    elif md.user_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the proposer or an administrator can modify elements on this Message Description."
+        )
+    return md
 
 # ── SWIFT standard field definitions ─────────────────────────────────────────
 # fin_format → (min_length, max_length, element_type, description)
@@ -127,6 +153,11 @@ class ElementCreate(BaseModel):
     example_value: Optional[str] = None
     parent_id: Optional[int] = None
     position: Optional[int] = 0
+    # Opts this field into a live Reference Data lookup — e.g. "ISO_CURRENCY"
+    # for a :32A: sub-field's Currency, "COUNTRY" for a Country field — see
+    # MessageDescriptionElement.reference_category. Copied onto the
+    # generated ValidationRule by import_rules_from_md.
+    reference_category: Optional[str] = None
 
 
 class ElementResponse(BaseModel):
@@ -151,6 +182,7 @@ class ElementResponse(BaseModel):
     description: Optional[str] = None
     example_value: Optional[str] = None
     position: Optional[int] = None
+    reference_category: Optional[str] = None
     children: List['ElementResponse'] = []
 
     class Config:
@@ -188,6 +220,7 @@ async def create_element(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    _authorize_element_write(db, current_user, md_id, "update")
     element = MessageDescriptionElement(
         message_description_id=md_id,
         **data.dict()
@@ -206,6 +239,7 @@ async def update_element(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    _authorize_element_write(db, current_user, md_id, "update")
     element = db.query(MessageDescriptionElement).filter(
         MessageDescriptionElement.id == element_id,
         MessageDescriptionElement.message_description_id == md_id
@@ -226,6 +260,7 @@ async def delete_element(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    _authorize_element_write(db, current_user, md_id, "delete")
     element = db.query(MessageDescriptionElement).filter(
         MessageDescriptionElement.id == element_id,
         MessageDescriptionElement.message_description_id == md_id

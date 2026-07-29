@@ -76,3 +76,17 @@ def get_current_active_admin(
             detail="Not enough permissions"
         )
     return current_user
+
+
+def get_current_admin_or_compliance(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    """Admin OR compliance officer — for reports/dashboards that are
+    compliance's own deliverable (regulatory export, SLA dashboard), not
+    an admin-only oversight tool like the raw Audit Log page."""
+    if not (current_user.is_admin or current_user.is_compliance_officer):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin or compliance officer access required"
+        )
+    return current_user

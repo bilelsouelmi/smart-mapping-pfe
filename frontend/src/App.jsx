@@ -13,6 +13,13 @@ import MessageDescriptionPage from './pages/MessageDescriptionPage';
 import ValidatePage from './pages/ValidatePage';
 import AdminPage from './pages/AdminPage';
 import AuditLogPage from './pages/AuditLogPage';
+import BusinessVariablesPage from './pages/BusinessVariablesPage';
+import ReferenceDataPage from './pages/ReferenceDataPage';
+import WatchlistPage from './pages/WatchlistPage';
+import PendingTransactionsPage from './pages/PendingTransactionsPage';
+import RegulatoryReportsPage from './pages/RegulatoryReportsPage';
+import SlaDashboardPage from './pages/SlaDashboardPage';
+import BatchTransformPage from './pages/BatchTransformPage';
 
 // ── Protected route: must be authenticated ────────────────────────────────────
 const ProtectedRoute = ({ children }) => {
@@ -38,6 +45,34 @@ const AdminRoute = ({ children }) => {
   return children;
 };
 
+// ── Compliance route: must be authenticated AND is_compliance_officer = true ─
+const ComplianceRoute = ({ children }) => {
+  const { isAuthenticated, loading, user } = useAuth();
+  if (loading) return (
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+      Loading...
+    </div>
+  );
+  if (!isAuthenticated) return <Navigate to="/login" />;
+  if (!user?.is_compliance_officer) return <Navigate to="/dashboard" />;
+  return children;
+};
+
+// ── Admin-or-compliance route: for pages gated the same way as the
+// backend's _require_compliance_access (e.g. the regulatory report is
+// compliance's own deliverable, but admins need oversight of it too) ──
+const AdminOrComplianceRoute = ({ children }) => {
+  const { isAuthenticated, loading, user } = useAuth();
+  if (loading) return (
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+      Loading...
+    </div>
+  );
+  if (!isAuthenticated) return <Navigate to="/login" />;
+  if (!(user?.is_admin || user?.is_compliance_officer)) return <Navigate to="/dashboard" />;
+  return children;
+};
+
 function App() {
   return (
     <Router>
@@ -55,6 +90,10 @@ function App() {
           <Route path="/outputs"             element={<ProtectedRoute><OutputsPage /></ProtectedRoute>} />
           <Route path="/message-descriptions" element={<ProtectedRoute><MessageDescriptionPage /></ProtectedRoute>} />
           <Route path="/validate"            element={<ProtectedRoute><ValidatePage /></ProtectedRoute>} />
+          <Route path="/business-variables"  element={<ProtectedRoute><BusinessVariablesPage /></ProtectedRoute>} />
+          <Route path="/reference-data"      element={<ProtectedRoute><ReferenceDataPage /></ProtectedRoute>} />
+          <Route path="/pending-transactions" element={<ProtectedRoute><PendingTransactionsPage /></ProtectedRoute>} />
+          <Route path="/batch" element={<ProtectedRoute><BatchTransformPage /></ProtectedRoute>} />
 
           {/* Legacy redirects: standalone transform pages merged into /mappings
               (Mapping Workspace's "Transform" button, auto-detects direction) */}
@@ -65,6 +104,9 @@ function App() {
           {/* Admin-only routes */}
           <Route path="/admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
           <Route path="/audit-log" element={<AdminRoute><AuditLogPage /></AdminRoute>} />
+          <Route path="/watchlist" element={<ComplianceRoute><WatchlistPage /></ComplianceRoute>} />
+          <Route path="/reports" element={<AdminOrComplianceRoute><RegulatoryReportsPage /></AdminOrComplianceRoute>} />
+          <Route path="/sla-dashboard" element={<AdminOrComplianceRoute><SlaDashboardPage /></AdminOrComplianceRoute>} />
 
           {/* Default redirect */}
           <Route path="/" element={<Navigate to="/dashboard" />} />

@@ -201,6 +201,35 @@ async def delete_config(
     config = db.query(TransportConfig).filter(TransportConfig.id == config_id).first()
     if not config:
         raise HTTPException(status_code=404, detail="Config not found")
+
+    # Two tables can reference this config by id:
+    #   - ConfigConsommation.config_in_id/config_out_id (NOT NULL) — an
+    #     active pipeline actually needs this config to run. Can't
+    #     silently null or delete that out from under the user, so it
+    #     blocks with a clear message instead of a raw 500.
+    #   - PendingDeliveryRetry.config_out_id (nullable) — just an
+    #     informational "which config this was headed to" link; the
+    #     retry record itself must survive, so only the dangling pointer
+    #     needs clearing.
+    from app.models.config_consommation import ConfigConsommation
+    from app.models.pending_delivery_retry import PendingDeliveryRetry
+
+    blocking_pipelines = db.query(ConfigConsommation.name).filter(
+        (ConfigConsommation.config_in_id == config_id) |
+        (ConfigConsommation.config_out_id == config_id)
+    ).all()
+    if blocking_pipelines:
+        names = ", ".join(f'"{n}"' for (n,) in blocking_pipelines)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot delete this config: still used by active pipeline configuration(s) {names}. "
+                   f"Remove or reassign {'those pipelines' if len(blocking_pipelines) > 1 else 'that pipeline'} first."
+        )
+
+    db.query(PendingDeliveryRetry).filter(
+        PendingDeliveryRetry.config_out_id == config_id
+    ).update({PendingDeliveryRetry.config_out_id: None}, synchronize_session=False)
+
     db.delete(config)
     db.commit()
     return {"message": "Config deleted"}

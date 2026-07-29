@@ -17,6 +17,7 @@ const AdminPage = () => {
   const [editData, setEditData] = useState({});
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [activeTab, setActiveTab] = useState(searchParams.get('tab') === 'access' ? 'access' : 'active');
+  const [processingId, setProcessingId] = useState(null);
 
   useEffect(() => {
     fetchUsers();
@@ -37,23 +38,38 @@ const AdminPage = () => {
     }
   };
 
-  const approveAccessRequest = async (id) => {
+  const approveAccessRequest = async (id, request) => {
+    if (processingId) return;
+    if (!window.confirm(
+      `Grant ${request.requester_username} permission to ${request.action_requested} "${request.md_file_name}"? ` +
+      `This is a one-time authorization — it's consumed the moment they use it.`
+    )) return;
+    setProcessingId(id);
     try {
       await axios.post(`/api/access-requests/${id}/approve`);
       toast.success('Access granted');
       fetchAccessRequests();
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Approval failed');
+    } finally {
+      setProcessingId(null);
     }
   };
 
-  const denyAccessRequest = async (id) => {
+  const denyAccessRequest = async (id, request) => {
+    if (processingId) return;
+    if (!window.confirm(
+      `Deny ${request.requester_username}'s request to ${request.action_requested} "${request.md_file_name}"?`
+    )) return;
+    setProcessingId(id);
     try {
       await axios.post(`/api/access-requests/${id}/deny`);
       toast.success('Access request denied');
       fetchAccessRequests();
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Denial failed');
+    } finally {
+      setProcessingId(null);
     }
   };
 
@@ -78,6 +94,8 @@ const AdminPage = () => {
   };
 
   const approveUser = async (userId) => {
+    if (processingId) return;
+    setProcessingId(userId);
     try {
       await axios.post(`/api/users/${userId}/approve`);
       toast.success('User approved successfully');
@@ -85,16 +103,22 @@ const AdminPage = () => {
       fetchPendingUsers();
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Approval failed');
+    } finally {
+      setProcessingId(null);
     }
   };
 
   const rejectUser = async (userId) => {
+    if (processingId) return;
+    setProcessingId(userId);
     try {
       await axios.post(`/api/users/${userId}/reject`);
       toast.success('User rejected and removed');
       fetchPendingUsers();
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Rejection failed');
+    } finally {
+      setProcessingId(null);
     }
   };
 
@@ -106,6 +130,7 @@ const AdminPage = () => {
       full_name: user.full_name || '',
       is_active: user.is_active,
       is_admin: user.is_admin,
+      is_compliance_officer: user.is_compliance_officer,
     });
   };
 
@@ -146,11 +171,12 @@ const AdminPage = () => {
     padding: '0.4rem 0.75rem', fontSize: '0.85rem', width: '100%',
   };
 
-  const btnStyle = (color) => ({
+  const btnStyle = (color, isDisabled = false) => ({
     display: 'flex', alignItems: 'center', gap: '6px',
     padding: '0.4rem 0.85rem', borderRadius: '8px',
     border: `1px solid ${color}40`, background: `${color}15`,
-    color, cursor: 'pointer', fontSize: '0.82rem', fontWeight: '600',
+    color, cursor: isDisabled ? 'not-allowed' : 'pointer', fontSize: '0.82rem', fontWeight: '600',
+    opacity: isDisabled ? 0.5 : 1,
   });
 
   return (
@@ -196,7 +222,8 @@ const AdminPage = () => {
 
         {/* Pending tab */}
         {activeTab === 'pending' && (
-          pendingUsers.length === 0 ? (
+          <div style={{ maxHeight: '65vh', overflowY: 'auto' }}>
+          {pendingUsers.length === 0 ? (
             <div style={{ ...cardStyle, textAlign: 'center', padding: '3rem', color: '#6b7280' }}>
               <Clock size={40} style={{ margin: '0 auto 1rem', opacity: 0.3, display: 'block' }} />
               No pending accounts to approve.
@@ -231,17 +258,18 @@ const AdminPage = () => {
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <button style={btnStyle('#10b981')} onClick={() => approveUser(u.id)}>
+                    <button style={btnStyle('#10b981', !!processingId)} onClick={() => approveUser(u.id)} disabled={!!processingId}>
                       <UserCheck size={14} /> Approve
                     </button>
-                    <button style={btnStyle('#ef4444')} onClick={() => rejectUser(u.id)}>
+                    <button style={btnStyle('#ef4444', !!processingId)} onClick={() => rejectUser(u.id)} disabled={!!processingId}>
                       <UserX size={14} /> Reject
                     </button>
                   </div>
                 </div>
               </div>
             ))
-          )
+          )}
+          </div>
         )}
 
         {/* Access Requests tab — non-admins asking to update/delete an
@@ -249,7 +277,8 @@ const AdminPage = () => {
             extension: approving isn't enough, editing an existing
             reference afterward needs its own explicit grant). */}
         {activeTab === 'access' && (
-          accessRequests.length === 0 ? (
+          <div style={{ maxHeight: '65vh', overflowY: 'auto' }}>
+          {accessRequests.length === 0 ? (
             <div style={{ ...cardStyle, textAlign: 'center', padding: '3rem', color: '#6b7280' }}>
               <KeyRound size={40} style={{ margin: '0 auto 1rem', opacity: 0.3, display: 'block' }} />
               No pending access requests.
@@ -286,22 +315,24 @@ const AdminPage = () => {
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <button style={btnStyle('#10b981')} onClick={() => approveAccessRequest(r.id)}>
+                    <button style={btnStyle('#10b981', !!processingId)} onClick={() => approveAccessRequest(r.id, r)} disabled={!!processingId}>
                       <Check size={14} /> Grant
                     </button>
-                    <button style={btnStyle('#ef4444')} onClick={() => denyAccessRequest(r.id)}>
+                    <button style={btnStyle('#ef4444', !!processingId)} onClick={() => denyAccessRequest(r.id, r)} disabled={!!processingId}>
                       <X size={14} /> Deny
                     </button>
                   </div>
                 </div>
               </div>
             ))
-          )
+          )}
+          </div>
         )}
 
         {/* Active users tab */}
         {activeTab === 'active' && (
-          loading ? <p style={{ color: '#6b7280' }}>Loading users...</p> :
+          <div style={{ maxHeight: '65vh', overflowY: 'auto' }}>
+          {loading ? <p style={{ color: '#6b7280' }}>Loading users...</p> :
           users.map((u) => (
             <div key={u.id} style={cardStyle}>
               {editingId === u.id ? (
@@ -341,6 +372,12 @@ const AdminPage = () => {
                           disabled={u.id === currentUser?.id} />
                         Admin
                       </label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '8px',
+                        cursor: 'pointer', color: '#9ca3af', fontSize: '0.85rem' }}>
+                        <input type="checkbox" checked={editData.is_compliance_officer}
+                          onChange={e => setEditData({ ...editData, is_compliance_officer: e.target.checked })} />
+                        Compliance Officer
+                      </label>
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -378,6 +415,11 @@ const AdminPage = () => {
                           border: `1px solid ${u.is_admin ? 'rgba(167,139,250,0.3)' : 'rgba(16,185,129,0.3)'}` }}>
                           {u.is_admin ? 'Admin' : 'User'}
                         </span>
+                        {u.is_compliance_officer && (
+                          <span style={{ fontSize: '0.7rem', padding: '2px 8px', borderRadius: '20px',
+                            background: 'rgba(239,68,68,0.15)', color: '#ef4444',
+                            border: '1px solid rgba(239,68,68,0.3)' }}>Compliance Officer</span>
+                        )}
                       </div>
                       <div style={{ color: '#6b7280', fontSize: '0.82rem', marginTop: '2px' }}>
                         {u.email}
@@ -409,7 +451,8 @@ const AdminPage = () => {
                 </div>
               )}
             </div>
-          ))
+          ))}
+          </div>
         )}
       </div>
     </Layout>

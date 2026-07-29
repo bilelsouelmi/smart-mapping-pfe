@@ -14,6 +14,22 @@ body {
   color: #e4e4e7;
 }
 
+/* Every <select> in this app is inline-styled with a dark background,
+   but that only paints the closed box — the native options popup
+   ignores it and defaults to a white background, so white option text
+   (inherited from the select) becomes invisible until browser hover-
+   highlight reveals it. color-scheme fixes this in the browsers that
+   support it; the explicit option colors are the fallback everywhere
+   else. */
+select {
+  color-scheme: dark;
+}
+
+select option {
+  background: #1e2a3a;
+  color: #e4e4e7;
+}
+
 /* Scrollbar Custom */
 ::-webkit-scrollbar {
   width: 10px;

@@ -26,18 +26,35 @@ OUTPUT_DIR = Path(settings.UPLOAD_DIR).parent / "outputs"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _unreleased_held_filenames(db: Session) -> set:
+    """Output filenames still gated by multi-level approval (status !=
+    'approved') — the generic outputs list/download must never surface
+    these, or the whole hold mechanism in pending_transactions.py is
+    pointless: a submitter (or anyone) could just grab the file here
+    instead of waiting for the required sign-offs."""
+    from app.models.pending_transaction import PendingTransactionApproval
+    rows = db.query(PendingTransactionApproval.output_filename).filter(
+        PendingTransactionApproval.status != "approved"
+    ).all()
+    return {r[0] for r in rows}
+
+
 @router.get("/outputs")
 async def list_outputs(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """
     Liste tous les fichiers OUTPUT générés.
     """
     try:
         output_files = []
+        held_filenames = _unreleased_held_filenames(db)
 
         if OUTPUT_DIR.exists():
             for file_path in list(OUTPUT_DIR.glob("*.json")) + list(OUTPUT_DIR.glob("*.xml")) + list(OUTPUT_DIR.glob("*.txt")):
+                if file_path.name in held_filenames:
+                    continue
                 output_files.append({
                     "filename": file_path.name,
                     "size": file_path.stat().st_size,
@@ -62,7 +79,8 @@ async def list_outputs(
 @router.get("/download/{filename}")
 async def download_output(
     filename: str,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """
     Télécharge un fichier output généré.
@@ -74,6 +92,12 @@ async def download_output(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"File {filename} not found"
+            )
+
+        if filename in _unreleased_held_filenames(db):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This output is held pending approval — see Pending Transactions."
             )
 
         if filename.endswith('.xml'):
@@ -95,6 +119,50 @@ async def download_output(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Download failed: {str(e)}"
+        )
+
+
+@router.delete("/outputs/{filename}")
+async def delete_output(
+    filename: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Supprime un fichier OUTPUT généré.
+    """
+    try:
+        file_path = (OUTPUT_DIR / filename).resolve()
+        # filename comes straight from the URL — reject anything that
+        # resolves outside OUTPUT_DIR (e.g. "../../app/main.py") before
+        # ever touching the filesystem.
+        if not file_path.is_relative_to(OUTPUT_DIR.resolve()):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid filename")
+
+        if not file_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"File {filename} not found"
+            )
+
+        # Same gate as download: a held output can't be pulled out from
+        # under the pending-approval workflow by deleting it either.
+        if filename in _unreleased_held_filenames(db):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This output is held pending approval — see Pending Transactions."
+            )
+
+        file_path.unlink()
+        return {"message": f"Output {filename} deleted"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Delete failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Delete failed: {str(e)}"
         )
 
 
