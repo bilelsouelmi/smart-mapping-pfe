@@ -47,3 +47,15 @@ backend/pipeline_test_out/
 # Database
 *.db
 *.sqlite3
+
+# Documentation de soutenance et rapport (hors depot de code)
+PLAN_DE_TEST_COMPLET.md
+SCENARIO_VIDEO_COMPLET.md
+SOUTENANCE_ETAPES.md
+SOUTENANCE_SCRIPT.md
+APERCU_MODULES.md
+report/
+image/
+
+# Repertoires de travail temporaires
+backend/fulltest_pipeline_in/

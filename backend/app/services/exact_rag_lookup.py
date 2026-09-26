@@ -206,7 +206,7 @@ def lookup_mt_to_iso_all(tag: str, mt_type: Optional[str], iso_target: Optional[
         try:
             must = [
                 FieldCondition(key='chunk_type', match=MatchValue(value='FIELD_MAPPING')),
-                FieldCondition(key='source', match=MatchValue(value=src_field_id))
+                FieldCondition(key='source_field', match=MatchValue(value=src_field_id))
             ]
             if mt_type_lower:
                 must.append(FieldCondition(key='source_message_type', match=MatchValue(value=mt_type_lower)))
@@ -244,30 +244,74 @@ def lookup_mt_to_iso_all(tag: str, mt_type: Optional[str], iso_target: Optional[
             }]
         return []
 
-    mapping_formula_obj = field_mapping_meta.get('mapping_formula', {})
-    formula_details = mapping_formula_obj.get('details', {}) if isinstance(mapping_formula_obj, dict) else {}
-    global_vars = formula_details.get('global_variables', {})
+    # Phase 2 of the Qdrant redesign moved the canonical formula and the
+    # documentation fields OUT of the FIELD_MAPPING payload and into two
+    # PostgreSQL tables (reference_mapping_formulas, mapping_documentation
+    # — kept separate on purpose, see each model's docstring), resolved
+    # here by the SAME (mapping_id, element_id) compound key both tables
+    # are keyed on — this is the "retrieval resolves from Qdrant to
+    # PostgreSQL" step from the approved design. Falls back to empty
+    # values (never raises) so a lookup still returns a usable
+    # target_path even if the Postgres side hasn't been imported yet.
+    doc_mapping_id = field_mapping_meta.get('mapping_id')
+    doc_element_id = field_mapping_meta.get('element_id')
+    formula_pseudocode = None
+    formula_expression = None
+    documentation = {}
+    if doc_mapping_id and doc_element_id:
+        try:
+            from app.database import SessionLocal
+            from app.models.mapping_documentation import MappingDocumentation
+            from app.models.reference_mapping_formula import ReferenceMappingFormula
+            db = SessionLocal()
+            try:
+                formula_row = db.query(ReferenceMappingFormula).filter(
+                    ReferenceMappingFormula.mapping_id == doc_mapping_id,
+                    ReferenceMappingFormula.element_id == doc_element_id,
+                ).first()
+                if formula_row:
+                    formula_pseudocode = formula_row.formula_pseudocode or formula_row.formula_expression
+                    formula_expression = formula_row.formula_expression
+
+                doc_row = db.query(MappingDocumentation).filter(
+                    MappingDocumentation.mapping_id == doc_mapping_id,
+                    MappingDocumentation.element_id == doc_element_id,
+                ).first()
+                if doc_row:
+                    documentation = {
+                        "audit_requirement": doc_row.audit_requirement,
+                        "compliance_requirement": doc_row.compliance_requirement,
+                        "data_privacy": doc_row.data_privacy,
+                        "migration_note": doc_row.migration_note,
+                        "caching_strategy": doc_row.caching_strategy,
+                        "performance_impact": doc_row.performance_impact,
+                    }
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"Postgres documentation/formula lookup failed for {doc_mapping_id}/{doc_element_id}: {e}")
 
     shared_fields = {
         "element_id": src_element_id,
         "mapping_id": field_mapping_meta.get('mapping_id'),
         "mapping_name": field_mapping_meta.get('mapping_name'),
-        "formula_pseudocode": mapping_formula_obj.get('pseudocode') if isinstance(mapping_formula_obj, dict) else None,
-        "global_variable_refs": list(global_vars.keys()) if global_vars else [],
-        "audit_requirement": field_mapping_meta.get('audit_requirement'),
-        "compliance_requirement": field_mapping_meta.get('compliance_requirement'),
-        "data_privacy": field_mapping_meta.get('data_privacy'),
-        "migration_note": field_mapping_meta.get('migration_note'),
-        "caching_strategy": field_mapping_meta.get('caching_strategy'),
-        "performance_impact": field_mapping_meta.get('performance_impact'),
-        "has_audit_requirement": field_mapping_meta.get('has_audit_requirement', False),
-        "has_compliance_requirement": field_mapping_meta.get('has_compliance_requirement', False),
-        "has_migration_note": field_mapping_meta.get('has_migration_note', False),
+        "formula_pseudocode": formula_pseudocode,
+        "formula_expression": formula_expression,
+        "global_variable_refs": field_mapping_meta.get('global_variables') or [],
+        "audit_requirement": documentation.get('audit_requirement'),
+        "compliance_requirement": documentation.get('compliance_requirement'),
+        "data_privacy": documentation.get('data_privacy'),
+        "migration_note": documentation.get('migration_note'),
+        "caching_strategy": documentation.get('caching_strategy'),
+        "performance_impact": documentation.get('performance_impact'),
+        "has_audit_requirement": bool(documentation.get('audit_requirement')),
+        "has_compliance_requirement": bool(documentation.get('compliance_requirement')),
+        "has_migration_note": bool(documentation.get('migration_note')),
     }
 
     # ── Step 3: resolve every declared target ───────────────────────────────
     target_ids = field_mapping_meta.get('target_all') or (
-        [field_mapping_meta.get('target')] if field_mapping_meta.get('target') else []
+        [field_mapping_meta.get('target_field')] if field_mapping_meta.get('target_field') else []
     )
     if not target_ids and src_target_path:
         return [{"target_path": src_target_path, **shared_fields}]
@@ -353,7 +397,8 @@ def semantic_similar_formulas(
     mt_type: Optional[str],
     iso_target: Optional[str] = None,
     n_results: int = 3,
-) -> List[str]:
+    with_scores: bool = False,
+):
     """
     Everything else in this file is an EXACT lookup (a field either has a
     dataset-authored formula or it doesn't). This is the one genuinely
@@ -371,7 +416,11 @@ def semantic_similar_formulas(
 
     Returns the raw chunk `content` text (human-readable, already includes
     the pseudocode formula) for the top matches — cheap to drop straight
-    into an LLM prompt, no further parsing needed.
+    into an LLM prompt, no further parsing needed. with_scores=True
+    returns (content, score) tuples instead, for callers that want to
+    display similarity (e.g. the AI Mapping Assistant's "Similar
+    Formulas" panel) — additive flag so the original callers (LLM
+    prompt-building, which only ever wanted the text) are unaffected.
     """
     if not query_text:
         return []
@@ -385,7 +434,14 @@ def semantic_similar_formulas(
         result = qm.search(query_text, n_results=n_results, filter_metadata=filter_metadata)
         if not result or not result.get("documents"):
             return []
-        return [doc for doc in result["documents"][0] if doc]
+        docs = result["documents"][0]
+        if with_scores:
+            scores = result.get("distances", [[]])[0]
+            return [
+                (doc, scores[i] if i < len(scores) else 0.0)
+                for i, doc in enumerate(docs) if doc
+            ]
+        return [doc for doc in docs if doc]
     except Exception as e:
         logger.warning(f"semantic_similar_formulas failed for '{query_text}': {e}")
         return []

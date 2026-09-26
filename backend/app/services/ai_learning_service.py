@@ -279,6 +279,14 @@ class AILearningService:
         from app.services.exact_rag_lookup import semantic_similar_formulas
         rag_context = semantic_similar_formulas(field_name or field_id, mt_type, iso_target, n_results=3)
 
+        # CAG: this is the path with the LEAST grounding (no exact/semantic
+        # RAG match found for this field), so it benefits most from live
+        # platform context — see context_builder.py's module docstring.
+        platform_context = None
+        if db:
+            from app.services.context_builder import build_mapping_context
+            platform_context = build_mapping_context(db, mt_type=mt_type) or None
+
         field_tag = field_id if field_id.startswith(':') else None
         result = llm_service.suggest_xml_mapping(
             mt_type=mt_type,
@@ -290,6 +298,7 @@ class AILearningService:
             }],
             formulas=formulas_context,
             rag_context=rag_context or None,
+            platform_context=platform_context,
         )
         elements = result.get("elements") or []
         if not elements:

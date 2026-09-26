@@ -3,10 +3,12 @@ RAG Admin API Routes
 Endpoints for managing RAG system
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from sqlalchemy.orm import Session
 from typing import Dict, Any
 import logging
 
+from app.database import get_db
 from app.services.rag_initializer import rag_initializer
 from app.services.qdrant_manager import qdrant_manager as chromadb_manager
 
@@ -93,6 +95,29 @@ async def reset_chromadb() -> Dict[str, Any]:
             
     except Exception as e:
         logger.error(f"Error resetting ChromaDB: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/mapping-documentation/import")
+async def import_mapping_documentation(db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """
+    Loads every dataset/mappings/*.xml file into two PostgreSQL tables:
+    mapping_documentation (business_rationale, migration_note,
+    audit_requirement, etc.) and reference_mapping_formulas
+    (formula_type/expression/pseudocode — kept separate from
+    documentation on purpose, see that model's docstring). Makes
+    PostgreSQL the source of truth for both instead of the XML files.
+    Purely additive — does not touch Qdrant/ChromaDB in any way, and is
+    safe to re-run whenever the XML files change (upserts, no duplicates).
+    """
+    try:
+        from app.services.mapping_documentation_import import import_mapping_documentation as run_import
+        result = run_import(db)
+        db.commit()
+        return {"success": True, "message": f"Processed {result['files']} mapping files", **result}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Mapping documentation import error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

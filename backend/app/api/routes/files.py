@@ -392,13 +392,29 @@ async def list_files(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Liste tous les fichiers uploadés par l'utilisateur"""
+    """Liste les Message Descriptions visibles par l'utilisateur : les siennes
+    (y compris ses brouillons non encore approuvés) ET toutes celles qui ont
+    été approuvées, quel qu'en soit le proposant.
+
+    Cette seconde condition est indispensable : une MD approuvée est par
+    définition la référence de la plateforme pour son type de message — c'est
+    tout l'objet de l'étape d'approbation. Les deux écrans qui consomment cet
+    endpoint en dépendent (la liste déroulante « standard de référence » de la
+    page Validate, et le choix de la Message Description à la création d'un
+    mapping). Restreindre au seul propriétaire créait une incohérence avec
+    transform_mapping.py, dont les contrôles préalables retiennent une MD
+    approuvée SANS filtre de propriétaire : un fichier pouvait donc être
+    transformé alors que la référence correspondante n'apparaissait dans
+    aucune des deux listes déroulantes."""
     try:
         from app.models import MessageDescriptionElement
-        from sqlalchemy import func
+        from sqlalchemy import func, or_
 
         message_descs = db.query(MessageDescription).filter(
-            MessageDescription.user_id == current_user.id
+            or_(
+                MessageDescription.user_id == current_user.id,
+                MessageDescription.approved == True,  # noqa: E712
+            )
         ).order_by(MessageDescription.created_at.desc()).all()
 
         # element_count lets callers (e.g. the Validate page's reference-
@@ -440,6 +456,100 @@ async def list_files(
     except Exception as e:
         logger.error(f"Error listing files: {e}")
         raise HTTPException(status_code=500, detail="Failed to list files")
+
+
+@router.get("/dashboard-stats")
+async def dashboard_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Chiffres de la page d'accueil, calculés sur le modele courant
+    (message_descriptions / mappings / mapping_elements / audit_logs).
+
+    L'ancien /with-formulas s'appuyait sur la table historique mapping_formulas,
+    que le flux SWIFT ne remplit plus : tous les compteurs y restaient a zero.
+    """
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import func, or_
+    from app.models.mapping import Mapping, MappingElement
+    from app.models.audit_log import AuditLog
+
+    try:
+        # -- Message Descriptions : visibles = les miennes OU celles approuvees
+        mds = db.query(MessageDescription).filter(
+            or_(
+                MessageDescription.user_id == current_user.id,
+                MessageDescription.approved == True,
+            )
+        ).all()
+        # dedoublonnage par nom de fichier, comme les autres listes
+        seen_md = {}
+        for md in mds:
+            if md.file_name not in seen_md:
+                seen_md[md.file_name] = md
+        md_list = list(seen_md.values())
+
+        # -- Mappings et elements
+        mappings = db.query(Mapping).all()
+        mapping_ids = [m.id for m in mappings]
+        total_elements = 0
+        mapped_elements = 0
+        if mapping_ids:
+            rows = db.query(
+                MappingElement.status, func.count(MappingElement.id)
+            ).filter(
+                MappingElement.mapping_id.in_(mapping_ids)
+            ).group_by(MappingElement.status).all()
+            for st, cnt in rows:
+                total_elements += cnt
+                if str(getattr(st, "value", st)).lower() == "mapped":
+                    mapped_elements += cnt
+
+        # -- Fichiers de sortie reellement presents sur le disque
+        outputs_dir = Path(settings.UPLOAD_DIR).parent / "outputs"
+        outputs_total = 0
+        if outputs_dir.exists():
+            outputs_total = sum(
+                1 for p in outputs_dir.iterdir()
+                if p.is_file() and p.suffix.lower() in (".xml", ".json", ".txt")
+            )
+
+        # -- Activite des 7 derniers jours, depuis la piste d'audit
+        today = datetime.now(timezone.utc).date()
+        start = today - timedelta(days=6)
+        buckets = {start + timedelta(days=i): 0 for i in range(7)}
+        logs = db.query(AuditLog).filter(
+            AuditLog.created_at >= datetime.combine(start, datetime.min.time(), tzinfo=timezone.utc)
+        ).all()
+        for entry in logs:
+            if entry.created_at:
+                day = entry.created_at.date()
+                if day in buckets:
+                    buckets[day] += 1
+        activity = [
+            {"name": d.strftime("%d/%m"), "events": n}
+            for d, n in sorted(buckets.items())
+        ]
+
+        completion = round(mapped_elements * 100 / total_elements) if total_elements else 0
+
+        return {
+            "message_descriptions": len(md_list),
+            "mt_files": sum(1 for m in md_list if m.file_type == "XML_MT"),
+            "approved_refs": sum(1 for m in md_list if m.approved),
+            "mappings_total": len(mappings),
+            "mappings_active": sum(1 for m in mappings if str(getattr(m.status, "value", m.status)).lower() == "active"),
+            "mapping_elements": total_elements,
+            "mapped_elements": mapped_elements,
+            "avg_mapping_completion": completion,
+            "outputs": outputs_total,
+            "activity": activity,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to build dashboard stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/with-formulas")

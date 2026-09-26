@@ -457,6 +457,19 @@ class SWIFTTextParser:
                     "type": "map",
                     "format": tag_def.get("format", "35x"),
                     "mandatory": tag_def.get("mandatory", False),
+                    # Kept alongside sub_fields (not a replacement for it —
+                    # the element tree/UI and reference_category tagging
+                    # need the decomposed Date/Currency/Amount view) so
+                    # transform_mapping.py's extract_source_fields() can
+                    # still find a top-level "value" the same way it does
+                    # for a plain string block. _MTFieldRef.component()
+                    # re-parses this exact raw string itself (its own
+                    # regex offsets, e.g. extract_amount_from_32a) — it
+                    # was never reading the split sub_fields at all, so
+                    # composite fields going flat here silently broke
+                    # amount/currency/date extraction for every :32A:-style
+                    # field the moment this block stopped carrying "value".
+                    "value": value,
                     "sub_fields": parsed_sub_fields,
                     "sub_fields_order": list(parsed_sub_fields.keys())
                 }

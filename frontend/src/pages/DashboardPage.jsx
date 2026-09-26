@@ -12,28 +12,19 @@ const DashboardPage = () => {
   const { user } = useAuth();
   const [stats, setStats] = useState({
     messageDescriptions: 0,
-    mappingFormulas: 0,
-    outputs: 0,
-    approvedRefs: 0,
-    // ── NOUVEAU : MT stats ─────────────────────────────────────────────────
     mtFiles: 0,
-    validatedFiles: 0,
-    avgQualityScore: 0,
-    avgMappingCompletion: 0
-    // ── FIN NOUVEAU ────────────────────────────────────────────────────────
+    approvedRefs: 0,
+    mappingsTotal: 0,
+    mappingsActive: 0,
+    mappingElements: 0,
+    mappedElements: 0,
+    avgMappingCompletion: 0,
+    outputs: 0
   });
   const [loading, setLoading] = useState(true);
   const [recentFiles, setRecentFiles] = useState([]);
-
-  const chartData = [
-    { name: 'Mon', files: 4 },
-    { name: 'Tue', files: 7 },
-    { name: 'Wed', files: 5 },
-    { name: 'Thu', files: 9 },
-    { name: 'Fri', files: 12 },
-    { name: 'Sat', files: 8 },
-    { name: 'Sun', files: 6 },
-  ];
+  // Activité réelle des 7 derniers jours, alimentée par la piste d'audit
+  const [chartData, setChartData] = useState([]);
 
   useEffect(() => {
     loadStats();
@@ -41,46 +32,27 @@ const DashboardPage = () => {
 
   const loadStats = async () => {
     try {
-      const [msgDesc, mappings, outputs] = await Promise.all([
-        axios.get('http://localhost:8000/api/files/with-formulas'),
-        axios.get('http://localhost:8000/api/mapping-formulas/'),
-        axios.get('http://localhost:8000/api/transform/outputs')
+      const [summary, files] = await Promise.all([
+        axios.get('http://localhost:8000/api/files/dashboard-stats'),
+        axios.get('http://localhost:8000/api/files/')
       ]);
 
-      // ── NOUVEAU : calculer stats MT depuis les fichiers ────────────────────
-      const allFiles = msgDesc.data.files || msgDesc.data || [];
-
-      const mtFiles = allFiles.filter(f => f.file_type === 'XML_MT');
-      const validatedFiles = allFiles.filter(f => f.status === 'validated');
-      const approvedRefs = allFiles.filter(f => f.approved);
-      const filesWithQuality = allFiles.filter(f => f.quality_score > 0);
-      const filesWithCompletion = allFiles.filter(f => f.mapping_completion > 0);
-
-      const avgQuality = filesWithQuality.length > 0
-        ? Math.round(filesWithQuality.reduce((sum, f) => sum + f.quality_score, 0) / filesWithQuality.length)
-        : 0;
-
-      const avgCompletion = filesWithCompletion.length > 0
-        ? Math.round(filesWithCompletion.reduce((sum, f) => sum + f.mapping_completion, 0) / filesWithCompletion.length)
-        : 0;
-
-      // Fichiers récents avec status
-      const recent = [...allFiles]
-        .sort((a, b) => b.id - a.id)
-        .slice(0, 5);
-      setRecentFiles(recent);
-      // ── FIN NOUVEAU ────────────────────────────────────────────────────────
-
+      const s = summary.data;
       setStats({
-        messageDescriptions: msgDesc.data.total || allFiles.length,
-        mappingFormulas: mappings.data.total || mappings.data.length || 0,
-        outputs: outputs.data.total_outputs || 0,
-        approvedRefs: approvedRefs.length,
-        mtFiles: mtFiles.length,
-        validatedFiles: validatedFiles.length,
-        avgQualityScore: avgQuality,
-        avgMappingCompletion: avgCompletion
+        messageDescriptions: s.message_descriptions,
+        mtFiles: s.mt_files,
+        approvedRefs: s.approved_refs,
+        mappingsTotal: s.mappings_total,
+        mappingsActive: s.mappings_active,
+        mappingElements: s.mapping_elements,
+        mappedElements: s.mapped_elements,
+        avgMappingCompletion: s.avg_mapping_completion,
+        outputs: s.outputs
       });
+      setChartData(s.activity || []);
+
+      const allFiles = files.data.files || files.data || [];
+      setRecentFiles([...allFiles].sort((a, b) => b.id - a.id).slice(0, 5));
     } catch (error) {
       console.error('Failed to load stats:', error);
     } finally {
@@ -129,9 +101,9 @@ const DashboardPage = () => {
           />
           <StatCard
             icon={<GitBranch size={32} />}
-            title="Mapping Formulas"
-            value={loading ? '...' : stats.mappingFormulas}
-            sub="Total created"
+            title="Mappings"
+            value={loading ? '...' : stats.mappingsTotal}
+            sub={`${stats.mappingsActive} active`}
             color="#764ba2"
             delay={0.1}
           />
@@ -147,16 +119,15 @@ const DashboardPage = () => {
             icon={<CheckCircle size={32} />}
             title="Approved References"
             value={loading ? '...' : stats.approvedRefs}
-            sub={`${stats.validatedFiles} validated`}
+            sub="Standards de référence"
             color="#f59e0b"
             delay={0.3}
           />
-          {/* ── NOUVEAU : MT Quality Stats ──────────────────────────────────── */}
           <StatCard
             icon={<Award size={32} />}
-            title="Avg Quality Score"
-            value={loading ? '...' : `${stats.avgQualityScore}%`}
-            sub="From ValidationReport"
+            title="Mapped Elements"
+            value={loading ? '...' : stats.mappedElements}
+            sub={`sur ${stats.mappingElements} éléments`}
             color="#06b6d4"
             delay={0.4}
           />
@@ -164,11 +135,10 @@ const DashboardPage = () => {
             icon={<Target size={32} />}
             title="Avg Mapping Completion"
             value={loading ? '...' : `${stats.avgMappingCompletion}%`}
-            sub="Columns mapped"
+            sub="Éléments mappés"
             color="#f43f5e"
             delay={0.5}
           />
-          {/* ── FIN NOUVEAU ──────────────────────────────────────────────────── */}
         </div>
 
         {/* ── NOUVEAU : Recent Files Status ──────────────────────────────────── */}
@@ -242,7 +212,7 @@ const DashboardPage = () => {
         {/* ── FIN NOUVEAU ──────────────────────────────────────────────────────── */}
 
         {/* Activity Chart */}
-        <Card title="Weekly Activity" icon={<TrendingUp size={24} />} style={{ marginBottom: '2rem' }}>
+        <Card title="Activité des 7 derniers jours" icon={<TrendingUp size={24} />} style={{ marginBottom: '2rem' }}>
           <ResponsiveContainer width="100%" height={250}>
             <AreaChart data={chartData}>
               <defs>
@@ -264,7 +234,8 @@ const DashboardPage = () => {
               />
               <Area
                 type="monotone"
-                dataKey="files"
+                dataKey="events"
+                name="Événements"
                 stroke="#667eea"
                 strokeWidth={3}
                 fillOpacity={1}

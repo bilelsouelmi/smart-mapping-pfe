@@ -668,3 +668,168 @@ def generate_mapping_elements(
         "formula_hits": formula_hits,
         "rag_exact_hits": rag_hits
     }
+
+
+@router.post("/{mapping_id}/generate-formula")
+def generate_formula(
+    mapping_id: int,
+    payload: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    AI-generates ONLY the transformation expression for a source/target
+    pair the user has already fixed by hand in the element create/edit
+    form — the narrower counterpart to generate_mapping_elements() above,
+    which also has to decide the pairing itself. mt_type/iso_target are
+    resolved from the Mapping row so the frontend only ever needs to send
+    the two field names.
+    """
+    from app.services.llm_service import LLMService
+    from app.services.exact_rag_lookup import semantic_similar_formulas
+    from app.services.context_builder import build_mapping_context
+    from app.services.formula_knowledge_extractor import extract_unrecognized_functions
+
+    source_field = (payload.get("source_field") or "").strip()
+    target_field = (payload.get("target_field") or "").strip()
+    if not source_field or not target_field:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+            detail="source_field and target_field are required")
+
+    mapping = db.query(Mapping).filter(Mapping.id == mapping_id).first()
+    if not mapping:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Mapping {mapping_id} not found")
+
+    mt_type = mapping.source
+    iso_target = mapping.target
+
+    rag_context = semantic_similar_formulas(
+        f"{source_field} to {target_field}", mt_type, iso_target, n_results=3
+    )
+    platform_context = build_mapping_context(db, mt_type=mt_type)
+
+    llm_service = LLMService()
+    expression = llm_service.generate_transformation_expression(
+        mt_type=mt_type, iso_target=iso_target,
+        source_field=source_field, target_field=target_field,
+        rag_context=rag_context or None, platform_context=platform_context or None,
+    )
+
+    # Guard against the LLM inventing a plausible-but-fake function name
+    # (e.g. "formatAmount" instead of the real toSwiftAmount) — flag it
+    # instead of silently trusting it, rather than blocking the response
+    # entirely, since a human reviews this in the Expression textarea
+    # before Save regardless.
+    warnings = []
+    if expression:
+        unrecognized = extract_unrecognized_functions(expression)
+        if unrecognized:
+            warnings.append(
+                f"Uses unrecognized function(s) not in the formula engine: {', '.join(unrecognized)} — please review before saving."
+            )
+
+    return {"expression": expression, "warnings": warnings}
+
+
+@router.post("/{mapping_id}/analyze-formula")
+def analyze_formula(
+    mapping_id: int,
+    payload: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    AI Mapping Assistant — fast, deterministic layer only: validation (no
+    LLM), similar formulas (RAG), business context (CAG). Deliberately
+    excludes the LLM reasoning call (see explain_formula() below) — this
+    endpoint is meant to be safe to call automatically on every edit
+    (debounced), and measured latency showed the LLM call alone can take
+    up to ~10s while this deterministic path is ~0.3s. Splitting them
+    keeps the auto-triggered part responsive; reasoning is opt-in.
+    """
+    from app.services.exact_rag_lookup import semantic_similar_formulas
+    from app.services.context_builder import build_mapping_context_structured
+    from app.services.formula_knowledge_extractor import analyze_expression
+
+    source_field = (payload.get("source_field") or "").strip()
+    target_field = (payload.get("target_field") or "").strip()
+    expression = (payload.get("expression") or "").strip()
+    if not source_field or not target_field:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+            detail="source_field and target_field are required")
+
+    mapping = db.query(Mapping).filter(Mapping.id == mapping_id).first()
+    if not mapping:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Mapping {mapping_id} not found")
+
+    mt_type = mapping.source
+    iso_target = mapping.target
+
+    similar = semantic_similar_formulas(
+        f"{source_field} to {target_field}", mt_type, iso_target, n_results=5, with_scores=True
+    )
+    similar_formulas = [
+        {"summary": content, "similarity": round(score, 3)}
+        for content, score in similar
+    ][:3]
+
+    validation = analyze_expression(db, mt_type, source_field, expression)
+
+    business_context = build_mapping_context_structured(db, mt_type=mt_type)
+
+    return {
+        "validation": validation,
+        "similar_formulas": similar_formulas,
+        "business_context": business_context,
+    }
+
+
+@router.post("/{mapping_id}/explain-formula")
+def explain_formula(
+    mapping_id: int,
+    payload: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    AI Mapping Assistant — on-demand LLM layer: the "Explain Formula"
+    button's endpoint. Separate from analyze_formula() above specifically
+    so the slow LLM round-trip (measured up to ~10s) only ever runs when
+    the user explicitly asks for it, not on every debounced edit.
+    """
+    from app.services.llm_service import LLMService
+    from app.services.exact_rag_lookup import semantic_similar_formulas
+    from app.services.context_builder import build_mapping_context
+
+    source_field = (payload.get("source_field") or "").strip()
+    target_field = (payload.get("target_field") or "").strip()
+    expression = (payload.get("expression") or "").strip()
+    if not source_field or not target_field:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+            detail="source_field and target_field are required")
+    if not expression:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+            detail="expression is required to explain")
+
+    mapping = db.query(Mapping).filter(Mapping.id == mapping_id).first()
+    if not mapping:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Mapping {mapping_id} not found")
+
+    mt_type = mapping.source
+    iso_target = mapping.target
+
+    rag_context = semantic_similar_formulas(f"{source_field} to {target_field}", mt_type, iso_target, n_results=3)
+    platform_context = build_mapping_context(db, mt_type=mt_type)
+
+    llm_service = LLMService()
+    reasoning = llm_service.explain_transformation_expression(
+        mt_type=mt_type, iso_target=iso_target,
+        source_field=source_field, target_field=target_field,
+        expression=expression,
+        rag_context=rag_context or None, platform_context=platform_context or None,
+    )
+
+    return {"reasoning": reasoning}

@@ -278,13 +278,14 @@ async def import_from_columns(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    from app.models.message_description import MessageDescription
-    md = db.query(MessageDescription).filter(
-        MessageDescription.id == md_id,
-        MessageDescription.user_id == current_user.id
-    ).first()
-    if not md:
-        raise HTTPException(status_code=404, detail="MessageDescription not found")
+    # Was previously gated by user_id == current_user.id with no admin
+    # exception — unlike every other write route in this file, which uses
+    # _authorize_element_write (admin bypasses; proposer or a consumed
+    # access grant otherwise). That meant an admin reviewing someone
+    # else's pending submission got a 404 "MessageDescription not found"
+    # on Generate MD, even though the row plainly exists and they're
+    # exactly who's supposed to be able to act on it.
+    md = _authorize_element_write(db, current_user, md_id, "update")
     if not md.column_structure:
         raise HTTPException(status_code=400, detail="No column_structure found")
 
@@ -338,13 +339,11 @@ async def import_from_mt_blocks(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    from app.models.message_description import MessageDescription
-    md = db.query(MessageDescription).filter(
-        MessageDescription.id == md_id,
-        MessageDescription.user_id == current_user.id
-    ).first()
-    if not md:
-        raise HTTPException(status_code=404, detail="MessageDescription not found")
+    # Same fix as import_from_columns above — was gated by user_id ==
+    # current_user.id with no admin exception, unlike every other write
+    # route in this file (_authorize_element_write: admin bypasses;
+    # proposer or a consumed access grant otherwise).
+    md = _authorize_element_write(db, current_user, md_id, "update")
     if not md.mt_blocks:
         raise HTTPException(status_code=400, detail="No MT blocks found")
 

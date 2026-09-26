@@ -26,13 +26,30 @@ async def import_rules_from_md(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Import validation rules from a MessageDescription's elements."""
+    """Import validation rules from a MessageDescription's elements.
+
+    Accepte la MD si l'utilisateur en est le propriétaire OU si elle est
+    approuvée. Une MD approuvée est la référence de la plateforme pour son
+    type de message : engendrer ses règles de validation est précisément
+    l'usage prévu, et l'opération est déterministe et idempotente (les
+    règles découlent des éléments de la MD). Restreindre au seul
+    propriétaire rendait la page Validate inutilisable dès que la référence
+    approuvée avait été proposée par quelqu'un d'autre — ce qui est le cas
+    normal, puisque le contrôle en double validation impose justement que
+    proposant et approbateur soient deux personnes différentes.
+
+    Les endpoints qui MODIFIENT une MD (suppression, édition des blocs)
+    restent, eux, réservés au propriétaire."""
     md = db.query(MessageDescription).filter(
-        MessageDescription.id == md_id,
-        MessageDescription.user_id == current_user.id
+        MessageDescription.id == md_id
     ).first()
     if not md:
         raise HTTPException(status_code=404, detail="MessageDescription not found")
+    if md.user_id != current_user.id and md.approved is not True:
+        raise HTTPException(
+            status_code=403,
+            detail="Cette Message Description ne vous appartient pas et n'est pas approuvée."
+        )
     # Use mt_type if available, fallback to file_type for CSV/JSON/Excel/XML
     # For flat files (CSV/Excel/JSON), try to detect MT type from column names
     detected_mt = md.mt_type

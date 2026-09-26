@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
+import { toast } from 'react-toastify';
 import {
   Plus, Edit2, Trash2, Link2, X, Check, Zap, Upload, FileText,
   Sparkles, ChevronDown, ChevronUp, ArrowLeftRight, Download
@@ -909,8 +910,102 @@ const ElementModal = ({ mode, element, mappingId, onSave, onClose }) => {
     msg_desc_element_id: element?.msg_desc_element_id || null,
     mapping_formula_id: element?.mapping_formula_id || null,
   });
+  const [generatingFormula, setGeneratingFormula] = useState(false);
+  const [analysis, setAnalysis] = useState(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [showAssistant, setShowAssistant] = useState(true);
+  // Analysis latency varies widely (measured 0.3s-11s depending on
+  // whether an LLM call is involved) — without this, a slow response to
+  // an OLDER edit can resolve after a faster response to a NEWER one and
+  // silently overwrite it with stale analysis. Only the response whose
+  // id still matches the latest fired request gets applied.
+  const analysisRequestId = useRef(0);
+  // Reasoning is deliberately separate state, fetched by its own
+  // on-demand endpoint (explain-formula) — NOT part of the debounced
+  // auto-analysis above. That endpoint alone measured up to ~10s (LLM
+  // round-trip); keeping it out of the auto-fired call means every edit
+  // doesn't pay that cost, only an explicit "Explain Formula" click does.
+  const [reasoning, setReasoning] = useState(null);
+  const [explainingFormula, setExplainingFormula] = useState(false);
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const handleGenerateFormula = async () => {
+    if (!form.source_field || !form.target_field) return;
+    setGeneratingFormula(true);
+    try {
+      const r = await axios.post(`${API}/mappings/${mappingId}/generate-formula`, {
+        source_field: form.source_field,
+        target_field: form.target_field,
+      });
+      set('expression', r.data.expression || '');
+      setReasoning(null);
+      (r.data.warnings || []).forEach(w => toast.warning(w));
+      if (!r.data.expression) toast.info('AI returned no expression — try filling in more detail or write it manually.');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Formula generation failed');
+    } finally {
+      setGeneratingFormula(false);
+    }
+  };
+
+  const handleExplainFormula = async () => {
+    if (!form.source_field || !form.target_field || !form.expression) return;
+    setExplainingFormula(true);
+    try {
+      const r = await axios.post(`${API}/mappings/${mappingId}/explain-formula`, {
+        source_field: form.source_field,
+        target_field: form.target_field,
+        expression: form.expression,
+      });
+      setReasoning(r.data.reasoning || []);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Explain failed');
+    } finally {
+      setExplainingFormula(false);
+    }
+  };
+
+  // Debounced auto-analysis — fast, deterministic layer only (validation,
+  // similar formulas, business context). Fires whether the expression
+  // came from Generate Formula or was hand-typed, whenever both fields
+  // are filled. 700ms so it doesn't fire on every keystroke while the
+  // user is still typing. Reasoning (LLM) is NOT part of this — see
+  // handleExplainFormula above.
+  useEffect(() => {
+    if (!form.source_field || !form.target_field) {
+      setAnalysis(null);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      const requestId = ++analysisRequestId.current;
+      setAnalyzing(true);
+      try {
+        const r = await axios.post(`${API}/mappings/${mappingId}/analyze-formula`, {
+          source_field: form.source_field,
+          target_field: form.target_field,
+          expression: form.expression,
+        });
+        if (requestId === analysisRequestId.current) setAnalysis(r.data);
+      } catch (e) {
+        // Silent — this is a background assistive panel, not a blocking
+        // action; a failed analysis shouldn't interrupt the user's edit.
+        if (requestId === analysisRequestId.current) setAnalysis(null);
+      } finally {
+        if (requestId === analysisRequestId.current) setAnalyzing(false);
+      }
+    }, 700);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.source_field, form.target_field, form.expression, mappingId]);
+
+  // A stale explanation for a formula the user has since changed is
+  // actively misleading (unlike the fast analysis, which just re-runs),
+  // so any edit clears it — the "Explain Formula" button makes getting
+  // it back a single click, not a lost result.
+  useEffect(() => {
+    setReasoning(null);
+  }, [form.expression]);
 
   return (
     <Modal title={mode === 'create' ? '➕ New Mapping Element' : '✏️ Edit Mapping Element'} onClose={onClose} wide>
@@ -936,12 +1031,133 @@ const ElementModal = ({ mode, element, mappingId, onSave, onClose }) => {
           <input value={form.default_value} onChange={e => set('default_value', e.target.value)} style={inputStyle} />
         </FormField>
         <div style={{ gridColumn: '1 / -1' }}>
-          <FormField label="Expression (Pseudocode)">
-            <textarea value={form.expression} onChange={e => set('expression', e.target.value)}
-              rows={5} style={{ ...inputStyle, resize: 'vertical', fontFamily: 'monospace', fontSize: '12px', color: '#a5f3fc' }}
-              placeholder={'mt103_ref = source.field_20\nmsg_id = mt103_ref + "_" + timestamp()\nreturn msg_id'} />
-          </FormField>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+            <label style={{ color: '#9ca3af', fontSize: '12px' }}>Expression (Pseudocode)</label>
+            <button
+              type="button"
+              onClick={handleGenerateFormula}
+              disabled={!form.source_field || !form.target_field || generatingFormula}
+              title={!form.source_field || !form.target_field ? 'Fill in Source Field and Target Field first' : 'Generate the transformation formula with AI'}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 10px',
+                background: 'rgba(167,139,250,0.15)', border: '1px solid rgba(167,139,250,0.35)',
+                borderRadius: '6px', color: '#a78bfa', fontSize: '12px', fontWeight: '600',
+                cursor: (!form.source_field || !form.target_field || generatingFormula) ? 'not-allowed' : 'pointer',
+                opacity: (!form.source_field || !form.target_field || generatingFormula) ? 0.5 : 1,
+              }}>
+              <Sparkles size={13} /> {generatingFormula ? 'Generating…' : 'Generate Formula'}
+            </button>
+          </div>
+          <textarea value={form.expression} onChange={e => set('expression', e.target.value)}
+            rows={5} style={{ ...inputStyle, resize: 'vertical', fontFamily: 'monospace', fontSize: '12px', color: '#a5f3fc' }}
+            placeholder={'mt103_ref = source.field_20\nmsg_id = mt103_ref + "_" + timestamp()\nreturn msg_id'} />
         </div>
+
+        {form.source_field && form.target_field && (
+          <div style={{ gridColumn: '1 / -1' }}>
+            <div
+              onClick={() => setShowAssistant(s => !s)}
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer',
+                padding: '8px 12px', background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.25)',
+                borderRadius: '8px 8px 0 0', borderBottom: showAssistant ? 'none' : '1px solid rgba(6,182,212,0.25)',
+              }}>
+              <span style={{ color: '#06b6d4', fontSize: '12px', fontWeight: '700' }}>
+                🤖 AI Assistant {analyzing && '· analyzing…'}
+              </span>
+              <span style={{ color: '#06b6d4', fontSize: '11px' }}>{showAssistant ? '▲' : '▼'}</span>
+            </div>
+            {showAssistant && (
+              <div style={{
+                border: '1px solid rgba(6,182,212,0.25)', borderTop: 'none', borderRadius: '0 0 8px 8px',
+                padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px',
+              }}>
+                {!analysis && !analyzing && (
+                  <span style={{ color: '#6b7280', fontSize: '12px' }}>
+                    Write or generate an expression above to get AI validation and similar formulas.
+                  </span>
+                )}
+
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <span style={{ color: '#9ca3af', fontSize: '11px', fontWeight: '700', textTransform: 'uppercase' }}>Reasoning</span>
+                    <button
+                      type="button"
+                      onClick={handleExplainFormula}
+                      disabled={!form.expression || explainingFormula}
+                      title={!form.expression ? 'Write or generate an expression first' : 'Ask the AI to explain this formula'}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '4px', padding: '3px 8px',
+                        background: 'rgba(167,139,250,0.15)', border: '1px solid rgba(167,139,250,0.35)',
+                        borderRadius: '5px', color: '#a78bfa', fontSize: '11px', fontWeight: '600',
+                        cursor: (!form.expression || explainingFormula) ? 'not-allowed' : 'pointer',
+                        opacity: (!form.expression || explainingFormula) ? 0.5 : 1,
+                      }}>
+                      🧠 {explainingFormula ? 'Explaining…' : 'Explain Formula'}
+                    </button>
+                  </div>
+                  {explainingFormula ? (
+                    <span style={{ color: '#6b7280', fontSize: '12px', fontStyle: 'italic' }}>Asking the AI to explain this formula…</span>
+                  ) : reasoning?.length > 0 ? (
+                    <ul style={{ margin: 0, paddingLeft: '18px', color: '#d1d5db', fontSize: '12px', lineHeight: '1.6' }}>
+                      {reasoning.map((line, i) => <li key={i}>{line}</li>)}
+                    </ul>
+                  ) : (
+                    <span style={{ color: '#6b7280', fontSize: '12px' }}>Not requested yet — click "Explain Formula" for AI reasoning.</span>
+                  )}
+                </div>
+
+                {analysis?.validation && (
+                  <div>
+                    <div style={{ color: '#9ca3af', fontSize: '11px', fontWeight: '700', marginBottom: '4px', textTransform: 'uppercase' }}>Validation</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '12px' }}>
+                      <span style={{ color: analysis.validation.syntax_valid ? '#6ee7b7' : '#fca5a5' }}>
+                        {analysis.validation.syntax_valid ? '✓' : '⚠'} Syntax {analysis.validation.syntax_valid ? 'looks valid' : 'looks incomplete (no assignment found)'}
+                      </span>
+                      {analysis.validation.unrecognized_functions?.length > 0 ? (
+                        <span style={{ color: '#fca5a5' }}>⚠ Unrecognized function(s): {analysis.validation.unrecognized_functions.join(', ')}</span>
+                      ) : (
+                        <span style={{ color: '#6ee7b7' }}>✓ All functions recognized</span>
+                      )}
+                      {analysis.validation.reference_checks?.map((c, i) => (
+                        <span key={i} style={{ color: c.used ? '#6ee7b7' : '#fbbf24' }}>
+                          {c.used ? '✓' : '⚠'} {c.used ? `Uses ${c.category} lookup` : `Missing ${c.category} lookup`}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {analysis?.similar_formulas?.length > 0 && (
+                  <div>
+                    <div style={{ color: '#9ca3af', fontSize: '11px', fontWeight: '700', marginBottom: '4px', textTransform: 'uppercase' }}>Similar Formulas</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      {analysis.similar_formulas.map((s, i) => (
+                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', padding: '6px 8px' }}>
+                          <span style={{ color: '#9ca3af', fontSize: '11px', fontFamily: 'monospace', whiteSpace: 'pre-wrap', flex: 1 }}>
+                            {s.summary} <span style={{ color: '#6b7280' }}>({Math.round(s.similarity * 100)}% match)</span>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {analysis?.business_context && (analysis.business_context.reference_categories?.length > 0 || analysis.business_context.business_variables?.length > 0) && (
+                  <div>
+                    <div style={{ color: '#9ca3af', fontSize: '11px', fontWeight: '700', marginBottom: '4px', textTransform: 'uppercase' }}>Business Context</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                      {analysis.business_context.reference_categories?.map(c => (
+                        <span key={c} style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '10px', background: 'rgba(6,182,212,0.15)', color: '#06b6d4', border: '1px solid rgba(6,182,212,0.3)', fontFamily: 'monospace' }}>{c}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', paddingTop: '1.5rem' }}>
           <input type="checkbox" checked={form.is_mandatory} onChange={e => set('is_mandatory', e.target.checked)}
             style={{ width: '16px', height: '16px', cursor: 'pointer' }} />

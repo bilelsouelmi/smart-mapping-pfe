@@ -235,7 +235,8 @@ Return ONLY the JSON, no markdown, no explanation.
         iso_target: str,
         source_fields: List[Dict[str, Any]],
         formulas: Optional[List[Dict[str, Any]]] = None,
-        rag_context: Optional[List[str]] = None
+        rag_context: Optional[List[str]] = None,
+        platform_context: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Suggère des mappings XPath ISO 20022 pour des champs SWIFT MT,
@@ -245,6 +246,15 @@ Return ONLY the JSON, no markdown, no explanation.
         Chaque champ est traité dans un appel LLM séparé (one-field-at-a-time)
         pour éliminer tout risque de troncature JSON. Le matching se fait par
         nom de champ (source_field_name) car field_tag est souvent vide en base.
+
+        platform_context (optional): the CAG counterpart to rag_context —
+        see context_builder.build_mapping_context(). RAG tells the model
+        what similar mappings looked like before; this tells it what the
+        platform's LIVE configuration actually is right now (Business
+        Variables, Reference Data categories, which fields already have
+        reference-backed validation) so it can suggest e.g. a
+        ReferenceLookup() call or a variable name instead of a hardcoded
+        literal.
         """
         all_elements: List[Dict[str, Any]] = []
 
@@ -262,6 +272,8 @@ Return ONLY the JSON, no markdown, no explanation.
             rag_block = "\n\nREFERENCE ISO 20022 XML STRUCTURE (from knowledge base):\n"
             rag_block += "\n---\n".join(rag_context[:3])
 
+        platform_block = f"\n\nPLATFORM CONTEXT:\n{platform_context}" if platform_context else ""
+
         for f in source_fields:
             field_name = f.get("name", "")
             field_tag = f.get("tag", "")
@@ -278,6 +290,7 @@ Tag: {field_tag or "(unknown)"}
 Description: {field_desc}
 {formulas_context}
 {rag_block}
+{platform_block}
 
 Provide the correct ISO 20022 XPath target within the {iso_target} schema
 for this field, and a SHORT transformation expression if needed (e.g. trim,
@@ -328,6 +341,137 @@ Return ONLY the JSON object, no markdown, no explanation, no array brackets.
                 continue
 
         return {"elements": all_elements}
+
+    def generate_transformation_expression(
+        self,
+        mt_type: str,
+        iso_target: str,
+        source_field: str,
+        target_field: str,
+        rag_context: Optional[List[str]] = None,
+        platform_context: Optional[str] = None
+    ) -> str:
+        """
+        Generates ONLY the transformation expression for a source/target pair
+        the user has already fixed by hand — the narrower counterpart to
+        suggest_xml_mapping(), which also has to guess the target itself.
+        Because pairing is already solved here, rag_context/platform_context
+        have somewhere real to influence the output (e.g. a ReferenceLookup()
+        call for a currency-shaped field), unlike suggest_xml_mapping's
+        target-search prompt where this project found no measurable effect.
+
+        Explicitly lists the real supported function names (from
+        transform_mapping.py's _XML_DIALECT_FUNCTIONS) so the model picks
+        from what the formula engine actually dispatches on at runtime,
+        instead of inventing a plausible-sounding one that doesn't exist
+        (e.g. "formatAmount" — the real equivalent is toSwiftAmount).
+        """
+        from app.api.routes.transform_mapping import _XML_DIALECT_FUNCTIONS
+        known_functions = ", ".join(sorted(_XML_DIALECT_FUNCTIONS.keys()))
+
+        rag_block = ""
+        if rag_context:
+            rag_block = "\n\nSIMILAR EXISTING FORMULAS (from knowledge base):\n"
+            rag_block += "\n---\n".join(rag_context[:3])
+
+        platform_block = f"\n\nPLATFORM CONTEXT:\n{platform_context}" if platform_context else ""
+
+        prompt = f"""You are a SWIFT-to-ISO20022 migration expert writing a single transformation formula.
+
+SOURCE MESSAGE TYPE: {mt_type}
+TARGET ISO 20022 SCHEMA: {iso_target}
+
+SOURCE FIELD: {source_field}
+TARGET FIELD (already decided — do not change or question it): {target_field}
+{rag_block}
+{platform_block}
+
+Write ONLY the transformation expression needed to convert the source
+field's value into the correct format for the target field, in the style
+of this project's existing formulas (e.g. "GrpHdr.MsgId = MT.F20.trim()",
+"CdtTrfTxInf.Amt.InstdAmt = decimal(MT.F32A.amount.replace(\",\",\".\"))").
+
+ONLY use these function names — do not invent new ones:
+{known_functions}
+
+Return ONLY the raw expression text on a single line. No JSON, no quotes
+around it, no markdown, no explanation, no code fences.
+"""
+
+        # Deliberately NOT JSON here (unlike every other LLM call in this
+        # file) — the payload is a single string, and that string is itself
+        # SWIFT-formula syntax full of quotes/parens/commas, which a small
+        # local model escapes into valid JSON unreliably (observed: raw
+        # unescaped newlines/quotes breaking json.loads with "Unterminated
+        # string"). Asking for the bare text sidesteps a failure mode JSON
+        # would only add, not prevent, for a value shaped like this.
+        response = self.generate(prompt, max_tokens=300, temperature=0.1)
+        response = response.strip()
+        if "```" in response:
+            parts = response.split("```")
+            response = parts[1] if len(parts) > 1 else parts[0]
+            response = response.replace("json", "", 1).strip() if response.lower().startswith("json") else response.strip()
+        # A quoted one-liner ("expr...") is still plausible even without the
+        # JSON wrapper being requested; strip a single matching pair only.
+        if len(response) >= 2 and response[0] == '"' and response[-1] == '"':
+            response = response[1:-1]
+        return response.split("\n")[0].strip()
+
+    def explain_transformation_expression(
+        self,
+        mt_type: str,
+        iso_target: str,
+        source_field: str,
+        target_field: str,
+        expression: str,
+        rag_context: Optional[List[str]] = None,
+        platform_context: Optional[str] = None
+    ) -> List[str]:
+        """
+        Explains (AI-generated expression) or reviews (hand-typed expression)
+        a formula for an already-fixed source/target pair — same underlying
+        task from the model's perspective either way, just framed by the
+        caller. Returns a short list of plain-language bullet points, e.g.
+        ["Extracts the amount from field :32A:", "Applies SWIFT amount
+        formatting"] — deliberately not JSON, same reasoning as
+        generate_transformation_expression: free-form natural language is
+        exactly the shape that broke JSON-string escaping there.
+        """
+        rag_block = ""
+        if rag_context:
+            rag_block = "\n\nSIMILAR EXISTING FORMULAS (from knowledge base):\n"
+            rag_block += "\n---\n".join(rag_context[:3])
+
+        platform_block = f"\n\nPLATFORM CONTEXT:\n{platform_context}" if platform_context else ""
+
+        prompt = f"""You are a SWIFT-to-ISO20022 migration expert reviewing a transformation formula.
+
+SOURCE MESSAGE TYPE: {mt_type}
+TARGET ISO 20022 SCHEMA: {iso_target}
+
+SOURCE FIELD: {source_field}
+TARGET FIELD: {target_field}
+FORMULA TO EXPLAIN:
+{expression}
+{rag_block}
+{platform_block}
+
+Write 2 to 4 short bullet points explaining what this formula does and
+whether it looks correct and complete for converting {source_field} into
+{target_field}. If something looks missing or wrong (e.g. no currency or
+date conversion where one is clearly needed), say so plainly as one of
+the bullets instead of only describing what IS there.
+
+Return ONLY the bullet points, one per line, no numbering, no markdown,
+no leading dashes, no introduction or conclusion sentence.
+"""
+
+        response = self.generate(prompt, max_tokens=400, temperature=0.2)
+        lines = [
+            line.strip().lstrip("-•*").strip()
+            for line in response.strip().split("\n")
+        ]
+        return [line for line in lines if line]
 
     def validate_transformation_result(
         self,

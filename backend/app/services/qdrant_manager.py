@@ -26,7 +26,7 @@ class QdrantManager:
         self,
         host: str = None,
         port: int = None,
-        collection_name: str = "xml_mappings"
+        collection_name: str = "xml_mappings_v2"
     ):
         self.host = host or settings.QDRANT_HOST
         self.port = port or settings.QDRANT_PORT

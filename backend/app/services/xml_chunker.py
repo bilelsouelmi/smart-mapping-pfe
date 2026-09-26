@@ -1,11 +1,31 @@
 """
 XML Chunking Service
 Converts XML mappings into semantic chunks for RAG
+
+Phase 2 of the Qdrant/RAG redesign: chunks are now lean, structured
+retrieval units instead of documentation carriers. business_rationale,
+migration_note, audit_requirement, compliance_requirement, data_privacy,
+caching_strategy, and performance_impact no longer appear in ANY chunk's
+payload or embedded content — that's PostgreSQL's job now
+(mapping_documentation, populated by mapping_documentation_import.py).
+Qdrant chunks carry only what's useful for finding and reusing a
+transformation pattern: identifiers, a resolvable doc_id back to
+Postgres, extracted functions/reference-data/global-variable usage (see
+formula_knowledge_extractor.py), and a short (1-2 sentence) semantic
+summary kept specifically to preserve embedding/retrieval quality for
+fuzzy natural-language queries — everything else is exact-match
+metadata, not prose.
+
+GLOBAL_VARIABLES chunks are retired entirely: they fully duplicated
+what's already live (and more current) in the business_variables
+Postgres table, and is now also surfaced dynamically at LLM-prompt time
+by context_builder.py's CAG layer — retrieving a static snapshot of it
+from Qdrant added nothing.
 """
 
 import logging
+import re
 from typing import List, Dict, Any
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -20,13 +40,24 @@ class XMLChunk:
         self.chunk_id = chunk_id
 
 
+def _short_summary(text: str, max_sentences: int = 2) -> str:
+    """First 1-2 sentences of a longer text (e.g. business_rationale),
+    used ONLY as a short embedding-quality aid — never the full text.
+    The full text lives in mapping_documentation, resolvable via doc_id."""
+    if not text:
+        return None
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    summary = ' '.join(s for s in sentences[:max_sentences] if s).strip()
+    return summary or None
+
+
 class XMLChunker:
     """Intelligent chunking of XML mapping files for RAG"""
 
     def __init__(self):
         self.chunk_types = [
             "GENERAL_INFO", "SOURCE_FIELD", "TARGET_FIELD", "FIELD_MAPPING",
-            "VALIDATION_RULE", "USE_CASE", "BUSINESS_CONTEXT", "GLOBAL_VARIABLES",
+            "VALIDATION_RULE", "USE_CASE",
         ]
 
     def chunk_mapping(self, mapping_data: Dict[str, Any]) -> List[XMLChunk]:
@@ -40,7 +71,6 @@ class XMLChunker:
         chunks.extend(self._chunk_field_mappings(mapping_data, mapping_id, mapping_name))
         chunks.extend(self._chunk_validation_rules(mapping_data, mapping_id, mapping_name))
         chunks.extend(self._chunk_use_cases(mapping_data, mapping_id, mapping_name))
-        chunks.extend(self._chunk_global_variables(mapping_data, mapping_id, mapping_name))
 
         logger.info(f"Created {len(chunks)} chunks for mapping: {mapping_id}")
         return chunks
@@ -111,24 +141,14 @@ class XMLChunker:
                 content_parts.extend(["", f"Example: {field['example_value']}"])
             content = "\n".join(content_parts)
 
+            # Only cross-referenced for its id now — the transformation
+            # itself (expression, criticality, etc.) lives on the
+            # FIELD_MAPPING chunk / mapping_documentation, not duplicated
+            # here. See this file's module docstring.
             related_mapping = next(
                 (m for m in mapping_data.get('field_mappings', []) if m.get('source_field') == field_id),
                 None
             )
-            src_formula_obj = None
-            if related_mapping:
-                global_info = mapping_data.get('general_information', {}).get('global_variables', {})
-                gv_refs = related_mapping.get('global_variable_refs', [])
-                src_global_vars = {ref: global_info.get(ref, {}).get('value', '') for ref in gv_refs}
-                src_conditions = {
-                    f"condition_{c.get('priority', str(i))}": c.get('expression', '')
-                    for i, c in enumerate(related_mapping.get('conditions', []), 1)
-                }
-                src_formula_obj = {
-                    "pseudocode": related_mapping.get('formula_pseudocode') or related_mapping.get('formula_expression'),
-                    "expression": related_mapping.get('formula_expression'),
-                    "details": {"global_variables": src_global_vars, "conditions": src_conditions}
-                }
 
             chunks.append(XMLChunk(
                 content=content,
@@ -136,23 +156,19 @@ class XMLChunker:
                     "chunk_type": "SOURCE_FIELD", "mapping_id": mapping_id, "mapping_name": mapping_name,
                     "field_id": field_id, "field_name": field_name, "field_tag": field_tag,
                     "message_type": source_type, "side": "SOURCE",
+                    "data_type": field.get('data_type'), "mandatory": field.get('mandatory'),
                     "source_message_type": source_msg_type.lower() if source_msg_type else None,
                     "target_message_type": target_msg_type.lower() if target_msg_type else None,
+                    # Structural resolution data (NOT documentation) —
+                    # exact_rag_lookup.py's Step 1 depends on these: some
+                    # reference files put a direct <TargetPath> on the
+                    # SourceField itself, which is the fast path to a
+                    # target xpath without needing the FIELD_MAPPING ->
+                    # TARGET_FIELD chain at all.
                     "element_id": field.get('element_id'),
                     "target_path": field.get('target_path'),
                     "target_xpath": field.get('target_xpath'),
-                    "mapping_formula": src_formula_obj,
-                    "formula_type": related_mapping.get('formula_type') if related_mapping else None,
-                    "criticality": related_mapping.get('criticality') if related_mapping else None,
-                    "audit_requirement": related_mapping.get('audit_requirement') if related_mapping else None,
-                    "compliance_requirement": related_mapping.get('compliance_requirement') if related_mapping else None,
-                    "data_privacy": related_mapping.get('data_privacy') if related_mapping else None,
-                    "migration_note": related_mapping.get('migration_note') if related_mapping else None,
-                    "caching_strategy": related_mapping.get('caching_strategy') if related_mapping else None,
-                    "performance_impact": related_mapping.get('performance_impact') if related_mapping else None,
-                    "has_audit_requirement": bool(related_mapping.get('audit_requirement')) if related_mapping else False,
-                    "has_compliance_requirement": bool(related_mapping.get('compliance_requirement')) if related_mapping else False,
-                    "has_migration_note": bool(related_mapping.get('migration_note')) if related_mapping else False,
+                    "related_element_id": related_mapping.get('id') if related_mapping else None,
                 },
                 chunk_type="SOURCE_FIELD", chunk_id=f"{mapping_id}_SRC_{field_id}"
             ))
@@ -207,20 +223,6 @@ class XMLChunker:
                 (m for m in mapping_data.get('field_mappings', []) if m.get('target_field') == field_id),
                 None
             )
-            tgt_formula_obj = None
-            if related_mapping:
-                global_info = mapping_data.get('general_information', {}).get('global_variables', {})
-                gv_refs = related_mapping.get('global_variable_refs', [])
-                tgt_global_vars = {ref: global_info.get(ref, {}).get('value', '') for ref in gv_refs}
-                tgt_conditions = {
-                    f"condition_{c.get('priority', str(i))}": c.get('expression', '')
-                    for i, c in enumerate(related_mapping.get('conditions', []), 1)
-                }
-                tgt_formula_obj = {
-                    "pseudocode": related_mapping.get('formula_pseudocode') or related_mapping.get('formula_expression'),
-                    "expression": related_mapping.get('formula_expression'),
-                    "details": {"global_variables": tgt_global_vars, "conditions": tgt_conditions}
-                }
 
             chunks.append(XMLChunk(
                 content=content,
@@ -229,22 +231,12 @@ class XMLChunker:
                     "field_id": field_id, "field_name": field_name, "field_tag": field_tag,
                     "message_type": target_type, "side": "TARGET",
                     "is_entity": field.get('is_entity', False),
+                    "data_type": field.get('data_type'), "mandatory": field.get('mandatory'),
                     "source_message_type": source_msg_type.lower() if source_msg_type else None,
                     "target_message_type": target_msg_type.lower() if target_msg_type else None,
                     # NOUVEAU : utilisé par generate-elements en sens ISO -> MT
                     "source_mt": source_mt,
-                    "mapping_formula": tgt_formula_obj,
-                    "formula_type": related_mapping.get('formula_type') if related_mapping else None,
-                    "criticality": related_mapping.get('criticality') if related_mapping else None,
-                    "audit_requirement": related_mapping.get('audit_requirement') if related_mapping else None,
-                    "compliance_requirement": related_mapping.get('compliance_requirement') if related_mapping else None,
-                    "data_privacy": related_mapping.get('data_privacy') if related_mapping else None,
-                    "migration_note": related_mapping.get('migration_note') if related_mapping else None,
-                    "caching_strategy": related_mapping.get('caching_strategy') if related_mapping else None,
-                    "performance_impact": related_mapping.get('performance_impact') if related_mapping else None,
-                    "has_audit_requirement": bool(related_mapping.get('audit_requirement')) if related_mapping else False,
-                    "has_compliance_requirement": bool(related_mapping.get('compliance_requirement')) if related_mapping else False,
-                    "has_migration_note": bool(related_mapping.get('migration_note')) if related_mapping else False,
+                    "related_element_id": related_mapping.get('id') if related_mapping else None,
                 },
                 chunk_type="TARGET_FIELD", chunk_id=f"{mapping_id}_TGT_{field_id}"
             ))
@@ -256,6 +248,41 @@ class XMLChunker:
         source_msg_type = mapping_data.get('source_message', {}).get('message_type', '')
         target_msg_type = mapping_data.get('target_message', {}).get('message_type', '')
 
+        # Resolves a target field's internal id (e.g. "TARGET_04") to its
+        # real ISO 20022 XPath, so single-target mappings can carry
+        # target_xpath directly (the common case) without every retrieval
+        # consumer needing a second lookup.
+        target_xpath_by_id = {
+            f.get('id'): (f.get('xpath') or f.get('field_tag'))
+            for f in mapping_data.get('target_message', {}).get('fields', [])
+            if f
+        }
+
+        # doc_id resolution: one bulk query per mapping file (not per
+        # field), matching the same "open a short-lived session for a
+        # cross-cutting read-only lookup" pattern already used by
+        # context_builder.py and transform_mapping.py's
+        # _get_global_variables() — xml_chunker has no db session of its
+        # own to borrow, and threading one through chunk_mapping()'s
+        # public signature would ripple into rag_initializer.py for no
+        # benefit over this.
+        doc_ids_by_element = {}
+        try:
+            from app.database import SessionLocal
+            from app.models.mapping_documentation import MappingDocumentation
+            db = SessionLocal()
+            try:
+                rows = db.query(MappingDocumentation.element_id, MappingDocumentation.id).filter(
+                    MappingDocumentation.mapping_id == mapping_id
+                ).all()
+                doc_ids_by_element = {element_id: doc_id for element_id, doc_id in rows}
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"Could not resolve doc_id for {mapping_id}: {e}")
+
+        from app.services.formula_knowledge_extractor import extract_all
+
         for mapping in field_mappings:
             if not mapping:
                 continue
@@ -264,126 +291,50 @@ class XMLChunker:
             target_field = mapping.get('target_field', 'UNKNOWN')
             # target_field_refs carries EVERY target this mapping declares
             # (via a <TargetFields> wrapper) — target_field above is only
-            # the first, kept for display/back-compat. Resolved to actual
-            # target_path strings in xml_chunker's caller via TARGET_FIELD
-            # chunks; here we just pass the raw internal refs through so
-            # exact_rag_lookup can look each one up.
+            # the first, kept for display/back-compat.
             target_field_refs = mapping.get('target_field_refs') or ([target_field] if target_field and target_field != 'UNKNOWN' else [])
+            target_xpath = target_xpath_by_id.get(target_field) if len(target_field_refs) == 1 else None
 
-            content_parts = [
-                f"Field Mapping: {source_field} -> {target_field}",
-                f"Mapping ID: {map_id}", f"Conversion: {mapping_name}", ""
-            ]
-            if mapping.get('criticality'):
-                content_parts.append(f"Criticality: {mapping['criticality']}")
-            if mapping.get('formula_type'):
-                content_parts.extend(["", f"Transformation Type: {mapping['formula_type']}"])
-            if mapping.get('formula_expression'):
-                content_parts.extend(["", "Transformation Logic:", mapping['formula_expression']])
-            conditions = mapping.get('conditions', [])
-            if conditions:
-                content_parts.extend(["", f"Validation Conditions ({len(conditions)}):"])
-                for i, condition in enumerate(conditions, 1):
-                    cond_type = condition.get('type', 'UNKNOWN')
-                    cond_expr = condition.get('expression', '')
-                    cond_action = condition.get('action', '')
-                    content_parts.append(f"{i}. {cond_type}: {cond_expr} -> {cond_action}")
-            if mapping.get('business_rationale'):
-                content_parts.extend(["", "Business Rationale:", mapping['business_rationale']])
-            if mapping.get('impact_if_fails'):
-                content_parts.extend(["", "Impact if Mapping Fails:", mapping['impact_if_fails']])
-            if mapping.get('performance_impact'):
-                content_parts.extend(["", f"Performance Impact: {mapping['performance_impact']}"])
-            if mapping.get('audit_requirement'):
-                content_parts.extend(["", "Audit Requirement:", mapping['audit_requirement']])
-            if mapping.get('compliance_requirement'):
-                content_parts.extend(["", "Compliance Requirement:", mapping['compliance_requirement']])
-            if mapping.get('data_privacy'):
-                content_parts.extend(["", "Data Privacy (GDPR):", mapping['data_privacy']])
-            if mapping.get('migration_note'):
-                content_parts.extend(["", "Migration Note:", mapping['migration_note']])
-            if mapping.get('caching_strategy'):
-                content_parts.extend(["", "Caching Strategy:", mapping['caching_strategy']])
-            if mapping.get('global_variable_refs'):
-                content_parts.extend(["", f"Global Variables Used: {', '.join(mapping['global_variable_refs'])}"])
+            expression = mapping.get('formula_expression') or ''
+            functions, reference_data, global_variables = extract_all(expression)
 
-            content = "\n".join(content_parts)
-            keywords = [source_field, target_field, mapping.get('formula_type', ''), mapping.get('criticality', '')]
+            summary = _short_summary(mapping.get('business_rationale'))
+            if not summary:
+                summary = f"{source_field} -> {target_field} ({mapping.get('formula_type') or 'DIRECT'})"
 
-            global_info = mapping_data.get('general_information', {}).get('global_variables', {})
-            gv_refs = mapping.get('global_variable_refs', [])
-            global_vars_dict = {
-                ref: global_info.get(ref, {}).get('value', '') if ref in global_info else ''
-                for ref in gv_refs
-            } if gv_refs else {}
-            conditions_dict = {
-                f"condition_{c.get('priority', str(i))}": c.get('expression', '')
-                for i, c in enumerate(mapping.get('conditions', []), 1)
-            } if mapping.get('conditions') else {}
-            mapping_formula_obj = {
-                "pseudocode": mapping.get("formula_pseudocode") or mapping.get("formula_expression"),
-                "expression": mapping.get("formula_expression"),
-                "details": {"global_variables": global_vars_dict, "conditions": conditions_dict}
-            }
+            keywords = sorted(set(filter(None, [
+                source_field, target_field, mapping.get('formula_type'), mapping.get('criticality'),
+                *functions, *reference_data,
+            ])))
+
+            content = "\n".join(filter(None, [
+                f"{source_field} -> {target_field} ({source_msg_type or '?'} -> {target_msg_type or '?'}, {mapping.get('formula_type') or 'DIRECT'})",
+                f"Functions: {', '.join(functions)}" if functions else None,
+                f"Reference Data: {', '.join(reference_data)}" if reference_data else None,
+                summary,
+            ]))
 
             chunks.append(XMLChunk(
                 content=content,
                 metadata={
-                    "chunk_type": "FIELD_MAPPING", "mapping_id": mapping_id, "mapping_name": mapping_name,
-                    "map_id": map_id, "source": source_field, "target": target_field,
-                    "target_all": target_field_refs, "element_id": map_id,
-                    "mapping_formula": mapping_formula_obj,
+                    "chunk_type": "FIELD_MAPPING",
+                    "mapping_id": mapping_id, "mapping_name": mapping_name,
+                    "element_id": map_id,
+                    "doc_id": doc_ids_by_element.get(map_id),
                     "source_message_type": source_msg_type.lower() if source_msg_type else None,
                     "target_message_type": target_msg_type.lower() if target_msg_type else None,
-                    "criticality": mapping.get('criticality'), "formula_type": mapping.get('formula_type'),
-                    "keywords": ", ".join([k for k in keywords if k]),
-                    "has_audit_requirement": bool(mapping.get('audit_requirement')),
-                    "has_compliance_requirement": bool(mapping.get('compliance_requirement')),
-                    "has_migration_note": bool(mapping.get('migration_note')),
-                    "performance_impact": mapping.get('performance_impact'),
-                    "audit_requirement": mapping.get('audit_requirement'),
-                    "compliance_requirement": mapping.get('compliance_requirement'),
-                    "data_privacy": mapping.get('data_privacy'),
-                    "migration_note": mapping.get('migration_note'),
-                    "caching_strategy": mapping.get('caching_strategy'),
+                    "source_field": source_field, "target_field": target_field,
+                    "target_all": target_field_refs, "target_xpath": target_xpath,
+                    "formula_type": mapping.get('formula_type'),
+                    "functions": functions,
+                    "reference_data": reference_data,
+                    "global_variables": global_variables,
+                    "criticality": mapping.get('criticality'),
+                    "keywords": keywords,
+                    "summary": summary,
                 },
-                chunk_type="FIELD_MAPPING", chunk_id=f"{mapping_id}_MAP_{map_id}"
+                chunk_type="FIELD_MAPPING", chunk_id=f"{mapping_id}_{map_id}"
             ))
-        return chunks
-
-    def _chunk_global_variables(self, mapping_data, mapping_id, mapping_name):
-        chunks = []
-        general_info = mapping_data.get('general_information', {})
-        global_vars = general_info.get('global_variables', {})
-        if not global_vars:
-            return chunks
-        source_msg_type = mapping_data.get('source_message', {}).get('message_type', '')
-        target_msg_type = mapping_data.get('target_message', {}).get('message_type', '')
-
-        content_parts = [
-            f"Global Variables and Configuration for {mapping_name}",
-            f"Conversion: {general_info.get('source_format', 'N/A')} -> {general_info.get('target_format', 'N/A')}",
-            "", "These variables control the behavior of all mappings in this conversion:", ""
-        ]
-        for name, var_info in global_vars.items():
-            value = var_info.get('value', 'N/A')
-            var_type = var_info.get('type', 'STRING')
-            description = var_info.get('description', '')
-            currency = var_info.get('currency', '')
-            currency_str = f" [{currency}]" if currency else ""
-            content_parts.append(f"- {name} = {value}{currency_str} ({var_type}): {description}")
-
-        content = "\n".join(content_parts)
-        chunks.append(XMLChunk(
-            content=content,
-            metadata={
-                "mapping_id": mapping_id, "mapping_name": mapping_name,
-                "chunk_type": "GLOBAL_VARIABLES", "variables_count": len(global_vars),
-                "source": source_msg_type.lower() if source_msg_type else None,
-                "target": target_msg_type.lower() if target_msg_type else None
-            },
-            chunk_type="GLOBAL_VARIABLES", chunk_id=f"{mapping_id}_GLOBALVARS"
-        ))
         return chunks
 
     def _chunk_validation_rules(self, mapping_data, mapping_id, mapping_name):

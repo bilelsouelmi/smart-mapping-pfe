@@ -21,6 +21,8 @@ from app.models.pending_transaction import PendingTransactionApproval, PendingTr
 from app.models.pending_validation_correction import PendingValidationCorrection
 from app.models.pending_delivery_retry import PendingDeliveryRetry
 from app.models.reference_data import ReferenceData
+from app.models.mapping_documentation import MappingDocumentation
+from app.models.reference_mapping_formula import ReferenceMappingFormula
 
 __all__ = [
     "User",
@@ -48,4 +50,6 @@ __all__ = [
     "PendingValidationCorrection",
     "PendingDeliveryRetry",
     "ReferenceData",
+    "MappingDocumentation",
+    "ReferenceMappingFormula",
 ]
